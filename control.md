@@ -85,8 +85,10 @@ redstoneLogging = false
 - `A` / `D`：Z 坐标减少 / 增加一格
 - `Space`：Y 坐标增加一格
 - `Shift`：Y 坐标减少一格
+- `Q`：悬停目标航向左旋 `1°`
+- `E`：悬停目标航向右旋 `1°`
 
-下降操作不会使目标高度低于 `baseThrustReferenceY`。尚未建立悬停目标时，微调按键不会生效。
+下降操作不会使目标高度低于 `baseThrustReferenceY`。尚未建立对应悬停目标位置或目标航向时，相关微调按键不会生效。
 
 ## 推荐调参顺序
 

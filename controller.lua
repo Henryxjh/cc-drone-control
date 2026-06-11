@@ -352,6 +352,20 @@ local function togglePower()
 end
 
 local function adjustHoverTarget(key)
+    if key == keys.q or key == keys.e then
+        if hoverTargetYaw == nil then
+            return false
+        end
+
+        local oneDegree = math.rad(1)
+        if key == keys.q then
+            hoverTargetYaw = normalizeAngle(hoverTargetYaw + oneDegree)
+        else
+            hoverTargetYaw = normalizeAngle(hoverTargetYaw - oneDegree)
+        end
+        return true
+    end
+
     if hoverTargetX == nil or hoverTargetY == nil or hoverTargetZ == nil then
         return false
     end
