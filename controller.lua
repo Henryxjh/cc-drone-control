@@ -532,10 +532,11 @@ local function applyAttitudeRecovery(now, pitchError, rollError)
         RECOVERY_MAX_CORRECTION
     )
 
-    sendSignedMotorSpeed("front", RECOVERY_REVERSE_SPEED + pitchCorrection)
-    sendSignedMotorSpeed("back", RECOVERY_REVERSE_SPEED - pitchCorrection)
-    sendSignedMotorSpeed("left", RECOVERY_REVERSE_SPEED + rollCorrection)
-    sendSignedMotorSpeed("right", RECOVERY_REVERSE_SPEED - rollCorrection)
+    -- 负速度的绝对值越大，反向推力越强，因此较高一侧必须减去正纠偏量。
+    sendSignedMotorSpeed("front", RECOVERY_REVERSE_SPEED - pitchCorrection)
+    sendSignedMotorSpeed("back", RECOVERY_REVERSE_SPEED + pitchCorrection)
+    sendSignedMotorSpeed("left", RECOVERY_REVERSE_SPEED - rollCorrection)
+    sendSignedMotorSpeed("right", RECOVERY_REVERSE_SPEED + rollCorrection)
 
     attitudeRecoveryState.previousPitchError = pitchError
     attitudeRecoveryState.previousRollError = rollError
