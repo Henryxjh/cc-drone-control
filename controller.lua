@@ -31,8 +31,9 @@ end
 requireConfigType("config", config, "table")
 local peripherals = requireConfigType("peripherals", config.peripherals, "table")
 local hoverConfig = requireConfigType("hover", config.hover, "table")
-local propellerControllers =
-    requireConfigType("propellerControllers", config.propellerControllers, "table")
+local propulsionConfig = requireConfigType("propulsion", config.propulsion, "table")
+local motorControllers =
+    requireConfigType("motorControllers", config.motorControllers, "table")
 
 local BLOCK_READER_SIDE =
     requireConfigType("peripherals.blockReader", peripherals.blockReader, "string")
@@ -45,10 +46,10 @@ local REDSTONE_RELAY_RIGHT_SIDE =
 local NAVIGATION_TABLE_BLOCK =
     requireConfigType("navigationTableBlock", config.navigationTableBlock, "string")
 
-requireConfigType("propellerControllers.left", propellerControllers.left, "number")
-requireConfigType("propellerControllers.right", propellerControllers.right, "number")
-requireConfigType("propellerControllers.front", propellerControllers.front, "number")
-requireConfigType("propellerControllers.back", propellerControllers.back, "number")
+requireConfigType("motorControllers.left", motorControllers.left, "number")
+requireConfigType("motorControllers.right", motorControllers.right, "number")
+requireConfigType("motorControllers.front", motorControllers.front, "number")
+requireConfigType("motorControllers.back", motorControllers.back, "number")
 
 local POWER_CONTROLLER_ID =
     requireConfigType("powerControllerId", config.powerControllerId, "number")
@@ -56,7 +57,28 @@ local POWER_RESPONSE_TIMEOUT =
     requireConfigType("powerResponseTimeout", config.powerResponseTimeout, "number")
 local UI_REFRESH_INTERVAL =
     requireConfigType("uiRefreshInterval", config.uiRefreshInterval, "number")
+local MINIMUM_MOTOR_SPEED =
+    requireConfigType("propulsion.minimumSpeed", propulsionConfig.minimumSpeed, "number")
+local MAXIMUM_MOTOR_SPEED =
+    requireConfigType("propulsion.maximumSpeed", propulsionConfig.maximumSpeed, "number")
+local MINIMUM_FLIGHT_SPEED =
+    requireConfigType("propulsion.minimumFlightSpeed", propulsionConfig.minimumFlightSpeed, "number")
+local MAXIMUM_FLIGHT_SPEED =
+    requireConfigType("propulsion.maximumFlightSpeed", propulsionConfig.maximumFlightSpeed, "number")
+
+if MINIMUM_MOTOR_SPEED >= MAXIMUM_MOTOR_SPEED then
+    fatalError("invalid propulsion range: minimumSpeed must be below maximumSpeed")
+end
+if MINIMUM_FLIGHT_SPEED < MINIMUM_MOTOR_SPEED or MAXIMUM_FLIGHT_SPEED > MAXIMUM_MOTOR_SPEED then
+    fatalError("invalid propulsion range: flight speed exceeds motor speed range")
+end
+if MINIMUM_FLIGHT_SPEED >= MAXIMUM_FLIGHT_SPEED then
+    fatalError("invalid propulsion range: minimumFlightSpeed must be below maximumFlightSpeed")
+end
+
 local BASE_THRUST = requireConfigType("hover.baseThrust", hoverConfig.baseThrust, "number")
+local BASE_THRUST_REFERENCE_Y =
+    requireConfigType("hover.baseThrustReferenceY", hoverConfig.baseThrustReferenceY, "number")
 local THRUST_PER_Y_LEVEL =
     requireConfigType("hover.thrustPerYLevel", hoverConfig.thrustPerYLevel, "number")
 local ALTITUDE_KP = requireConfigType("hover.altitudeKp", hoverConfig.altitudeKp, "number")
@@ -81,6 +103,10 @@ local VERTICAL_MOVE_SPEED =
     requireConfigType("hover.verticalMoveSpeed", hoverConfig.verticalMoveSpeed, "number")
 local BALANCE_TIMEOUT = requireConfigType("balanceTimeout", config.balanceTimeout, "number")
 local GPS_TIMEOUT = requireConfigType("gpsTimeout", config.gpsTimeout, "number")
+
+if BASE_THRUST < MINIMUM_FLIGHT_SPEED or BASE_THRUST > MAXIMUM_FLIGHT_SPEED then
+    fatalError("invalid hover.baseThrust: outside normal flight speed range")
+end
 
 local modem = peripheral.find("modem")
 if modem == nil or not modem.isWireless() then
@@ -166,12 +192,13 @@ local safetyShutdown = false
 local powerControllerX
 local powerControllerY
 local powerControllerZ
-local propellerThrust = {
+local motorSpeed = {
     left = 0,
     right = 0,
     front = 0,
     back = 0,
 }
+local actualMotorSpeed = {}
 
 local function clamp(value, minimum, maximum)
     return math.max(minimum, math.min(maximum, value))
@@ -187,18 +214,24 @@ local function normalizeAngle(angle)
     return angle
 end
 
-local function sendPropellerThrust(side, thrust)
-    local roundedThrust = math.floor(clamp(thrust, 0, 15) + 0.5)
-    local redstoneStrength = 15 - roundedThrust
-    propellerThrust[side] = roundedThrust
-    rednet.send(propellerControllers[side], redstoneStrength, side)
+local function round(value)
+    if value >= 0 then
+        return math.floor(value + 0.5)
+    end
+    return math.ceil(value - 0.5)
 end
 
-local function stopAllPropellers()
-    sendPropellerThrust("front", 0)
-    sendPropellerThrust("back", 0)
-    sendPropellerThrust("left", 0)
-    sendPropellerThrust("right", 0)
+local function sendMotorSpeed(side, speed)
+    local roundedSpeed = round(clamp(speed, MINIMUM_FLIGHT_SPEED, MAXIMUM_FLIGHT_SPEED))
+    motorSpeed[side] = roundedSpeed
+    rednet.send(motorControllers[side], roundedSpeed, side)
+end
+
+local function stopAllMotors()
+    for side, controllerId in pairs(motorControllers) do
+        motorSpeed[side] = 0
+        rednet.send(controllerId, 0, side)
+    end
 end
 
 local function resetHoverTarget()
@@ -220,7 +253,9 @@ local function waitForPowerResponse()
     if sender == POWER_CONTROLLER_ID and type(state) == "boolean" then
         local wasEnabled = powerEnabled
         powerEnabled = state
-        if wasEnabled == false and state then
+        if not state then
+            stopAllMotors()
+        elseif wasEnabled == false then
             resetHoverTarget()
         end
         return true
@@ -249,7 +284,7 @@ local function emergencyPowerOff()
     end
 
     safetyShutdown = true
-    stopAllPropellers()
+    stopAllMotors()
     rednet.send(POWER_CONTROLLER_ID, false, "powerset")
     powerEnabled = false
     resetHoverTarget()
@@ -285,6 +320,48 @@ local function requestPowerPosition()
     return true
 end
 
+local function requestMotorSpeeds()
+    local sideByControllerId = {}
+    local remaining = 0
+
+    for side, controllerId in pairs(motorControllers) do
+        sideByControllerId[controllerId] = side
+        rednet.send(controllerId, true, "speed")
+        remaining = remaining + 1
+    end
+
+    local timer = os.startTimer(BALANCE_TIMEOUT)
+    while remaining > 0 do
+        local event, first, second, third = os.pullEvent()
+
+        if event == "timer" and first == timer then
+            break
+        end
+
+        if event == "rednet_message" and third == "speedresp" then
+            local side = sideByControllerId[first]
+            if side
+                and actualMotorSpeed[side] == nil
+                and type(second) == "number"
+                and second >= MINIMUM_MOTOR_SPEED
+                and second <= MAXIMUM_MOTOR_SPEED
+            then
+                actualMotorSpeed[side] = second
+                remaining = remaining - 1
+            end
+        end
+    end
+
+    return remaining == 0
+end
+
+local function formatMotorSpeed(speed)
+    if type(speed) ~= "number" then
+        return "?"
+    end
+    return tostring(speed)
+end
+
 local function drawPowerUi(message)
     term.clear()
     term.setCursorPos(1, 1)
@@ -310,10 +387,17 @@ local function drawPowerUi(message)
     end
 
     print("")
-    print(("Thrust F:%d B:%d"):format(propellerThrust.front, propellerThrust.back))
-    print(("Thrust L:%d R:%d"):format(propellerThrust.left, propellerThrust.right))
-    print(("Signal F:%d B:%d"):format(15 - propellerThrust.front, 15 - propellerThrust.back))
-    print(("Signal L:%d R:%d"):format(15 - propellerThrust.left, 15 - propellerThrust.right))
+    print(("Cmd F:%d B:%d"):format(motorSpeed.front, motorSpeed.back))
+    print(("Cmd L:%d R:%d"):format(motorSpeed.left, motorSpeed.right))
+    print(("Real F:%s B:%s"):format(
+        formatMotorSpeed(actualMotorSpeed.front),
+        formatMotorSpeed(actualMotorSpeed.back)
+    ))
+    print(("Real L:%s R:%s"):format(
+        formatMotorSpeed(actualMotorSpeed.left),
+        formatMotorSpeed(actualMotorSpeed.right)
+    ))
+    print(("Motor range: %d to %d"):format(MINIMUM_MOTOR_SPEED, MAXIMUM_MOTOR_SPEED))
 
     print("")
     print("Press Enter to toggle power")
@@ -337,7 +421,7 @@ local function readPropellerPositions()
     local positions = {}
     local remaining = 0
 
-    for _, controllerId in pairs(propellerControllers) do
+    for _, controllerId in pairs(motorControllers) do
         rednet.send(controllerId, true, "balance")
         remaining = remaining + 1
     end
@@ -355,7 +439,7 @@ local function readPropellerPositions()
             local response = second
             local side = type(response) == "table" and response[1]
 
-            if propellerControllers[side] == sender
+            if motorControllers[side] == sender
                 and type(response[2]) == "number"
                 and type(response[3]) == "number"
                 and type(response[4]) == "number"
@@ -473,7 +557,8 @@ local function updateHover()
 
     local altitudeCorrection =
         ALTITUDE_KP * (hoverTargetY - controllerY) - ALTITUDE_KD * verticalVelocity
-    local hoverThrust = BASE_THRUST + hoverTargetY * THRUST_PER_Y_LEVEL
+    local hoverThrust =
+        BASE_THRUST + (hoverTargetY - BASE_THRUST_REFERENCE_Y) * THRUST_PER_Y_LEVEL
     local pitchCorrection =
         -LEVEL_KP * (pitchError - desiredPitchError) - LEVEL_KD * pitchRate
     local rollCorrection =
@@ -491,19 +576,19 @@ local function updateHover()
     end
 
     -- 前后桨逆时针旋转，增强时机体向右自旋；左右桨顺时针旋转，增强时向左自旋。
-    sendPropellerThrust(
+    sendMotorSpeed(
         "front",
         hoverThrust + altitudeCorrection + pitchCorrection + yawCorrection
     )
-    sendPropellerThrust(
+    sendMotorSpeed(
         "back",
         hoverThrust + altitudeCorrection - pitchCorrection + yawCorrection
     )
-    sendPropellerThrust(
+    sendMotorSpeed(
         "left",
         hoverThrust + altitudeCorrection + rollCorrection - yawCorrection
     )
-    sendPropellerThrust(
+    sendMotorSpeed(
         "right",
         hoverThrust + altitudeCorrection - rollCorrection - yawCorrection
     )
@@ -626,11 +711,13 @@ local function powerUiLoop()
             refreshTimer = os.startTimer(UI_REFRESH_INTERVAL)
         elseif event == "timer" and value == refreshTimer then
             if safetyShutdown then
-                stopAllPropellers()
+                stopAllMotors()
                 rednet.send(POWER_CONTROLLER_ID, false, "powerset")
                 requestPowerStatus()
             end
             local positionUpdated = requestPowerPosition()
+            actualMotorSpeed = {}
+            requestMotorSpeeds()
             drawPowerUi(positionUpdated and nil or "Power position unavailable")
             refreshTimer = os.startTimer(UI_REFRESH_INTERVAL)
         end

@@ -2,12 +2,51 @@
 
 所有可调参数位于 `controller-config.lua`。控制器使用 GPS 位置反馈估算速度和姿态，没有加速度传感器与陀螺仪，因此参数过大时容易放大 GPS 噪声。
 
-推力等级与实际红石信号方向相反：
+动力控制器使用有符号电机速度：
 
-- 算法推力 `0`：关闭，对应红石信号 `15`
-- 算法推力 `15`：最强，对应红石信号 `0`
+- `0`：无推力
+- `256`：正向最大推力
+- `-256`：反向最大推力
 
-调参时每次只修改一组参数，并先在低空测试。
+控制器正常飞行输出限制在 `0..256`，避免姿态纠偏过大时产生反向下压力。负速度由动力协议支持，可用于电机安装方向修正或后续特殊动作。
+
+调参时每次只修改一组参数，并先在低空测试。旧的 `0..15` 动力参数不能直接继续使用。
+
+## 动力范围
+
+```lua
+propulsion = {
+    minimumSpeed = -256,
+    maximumSpeed = 256,
+    minimumFlightSpeed = 0,
+    maximumFlightSpeed = 256,
+}
+```
+
+正常情况下不要将 `minimumFlightSpeed` 设置为负数。
+
+## 动力控制器通信协议
+
+每个动力控制器在 `side.lua` 中配置自己的 `position` 和 `reverse`：
+
+```lua
+local position = "left"
+local reverse = false
+```
+
+- 主控制器使用 `position` 作为 rednet protocol，消息内容为 `-256..256` 的电机速度
+- 动力控制器调用 `electric_motor.setSpeed(speed)`
+- `reverse = true` 会反转收到的速度，用于修正电机安装方向
+- protocol 为 `balance` 时，动力控制器返回 `{position, x, y, z}`
+- protocol 为 `speed` 时，动力控制器返回电机当前实际速度
+
+正常悬停时，四台动力控制器接收到的正速度都必须产生向上推力。
+
+控制器 UI 中：
+
+- `Cmd` 表示主控制器下发的目标速度
+- `Real` 表示动力控制器通过 `electric_motor.getSpeed()` 返回的实际速度
+- `Real` 为 `?` 表示对应动力控制器未在超时前响应
 
 ## 推荐调参顺序
 
@@ -21,28 +60,31 @@
 ## 基础悬停推力
 
 ```lua
-baseThrust = 8
-thrustPerYLevel = 0.01
+baseThrust = 137
+baseThrustReferenceY = -50
+thrustPerYLevel = 0.17
 ```
 
 实际基础悬停推力为：
 
 ```lua
-baseThrust + targetY * thrustPerYLevel
+baseThrust + (targetY - baseThrustReferenceY) * thrustPerYLevel
 ```
 
+- `baseThrust`：参考高度时的基础悬停速度
+- `baseThrustReferenceY`：`baseThrust` 对应的 Y 坐标，当前为 `-50`
 - 持续下降：增大 `baseThrust`
 - 持续上升：减小 `baseThrust`
 - 仅在高处持续下降：增大 `thrustPerYLevel`
 - 仅在高处持续上升：减小 `thrustPerYLevel`
 
-先关闭其他纠偏影响进行校准。建议每次调整 `baseThrust` 约 `0.1` 到 `0.25`。
+先关闭其他纠偏影响进行校准。建议每次调整 `baseThrust` 约 `1` 到 `4`。
 
 ## 高度保持
 
 ```lua
-altitudeKp = 2.0
-altitudeKd = 1.5
+altitudeKp = 34.0
+altitudeKd = 25.5
 ```
 
 - `altitudeKp`：根据目标高度误差调整推力
@@ -59,15 +101,15 @@ altitudeKd = 1.5
 平稳优先可从以下值开始：
 
 ```lua
-altitudeKp = 1.0
-altitudeKd = 0.8
+altitudeKp = 17.0
+altitudeKd = 14.0
 ```
 
 ## 机体调平
 
 ```lua
-levelKp = 3.0
-levelKd = 1.0
+levelKp = 51.0
+levelKd = 12.0
 ```
 
 - `levelKp`：纠正前后、左右螺旋桨的高度差
@@ -85,8 +127,8 @@ levelKd = 1.0
 平稳优先可从以下值开始：
 
 ```lua
-levelKp = 1.5
-levelKd = 0.4
+levelKp = 26.0
+levelKd = 7.0
 ```
 
 ## 水平位置保持
@@ -120,10 +162,10 @@ maxTiltError = 0.15
 ## 自旋与航向保持
 
 ```lua
-yawThrustDifference = 1
-yawKp = 1.0
-yawKd = 0.4
-maxYawCorrection = 1.5
+yawThrustDifference = 17
+yawKp = 17.0
+yawKd = 7.0
+maxYawCorrection = 26
 ```
 
 - `yawThrustDifference`：手动自旋时两组反向旋转螺旋桨的推力差
@@ -176,23 +218,24 @@ uiRefreshInterval = 0.5
 
 ```lua
 hover = {
-    baseThrust = 8,
-    thrustPerYLevel = 0.01,
+    baseThrust = 137,
+    baseThrustReferenceY = -50,
+    thrustPerYLevel = 0.17,
 
-    altitudeKp = 1.0,
-    altitudeKd = 0.8,
+    altitudeKp = 17.0,
+    altitudeKd = 14.0,
 
-    levelKp = 1.5,
-    levelKd = 0.4,
+    levelKp = 26.0,
+    levelKd = 7.0,
 
     horizontalKp = 0.08,
     horizontalKd = 0.25,
     maxTiltError = 0.15,
 
-    yawThrustDifference = 1,
-    yawKp = 0.7,
-    yawKd = 0.25,
-    maxYawCorrection = 1.0,
+    yawThrustDifference = 17,
+    yawKp = 12.0,
+    yawKd = 4.0,
+    maxYawCorrection = 17,
 
     horizontalMoveSpeed = 1.0,
     verticalMoveSpeed = 0.75,

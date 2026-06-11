@@ -10,8 +10,8 @@ return {
     -- Block Reader 必须读取的方块注册名。
     navigationTableBlock = "simulated:navigation_table",
 
-    -- 四个螺旋桨控制器的计算机 ID。
-    propellerControllers = {
+    -- 四个动力控制器的计算机 ID。
+    motorControllers = {
         left = 2,
         right = 3,
         front = 4,
@@ -27,20 +27,33 @@ return {
     gpsTimeout = 0.25,
     uiRefreshInterval = 0.5,
 
+    propulsion = {
+        -- 电机协议支持的完整速度范围。
+        minimumSpeed = -256,
+        maximumSpeed = 256,
+
+        -- 正常飞行允许的速度范围。最低值保持为 0，避免产生反向下压力。
+        minimumFlightSpeed = 0,
+        maximumFlightSpeed = 256,
+    },
+
     hover = {
-        -- Y=0 时单个螺旋桨的基础悬停推力，范围为 0 到 15。
-        baseThrust = 8,
+        -- 参考高度时单个动力源的基础悬停速度，范围为 0 到 256。
+        baseThrust = 137,
+
+        -- baseThrust 对应的 Y 坐标。
+        baseThrustReferenceY = -50,
 
         -- 目标 Y 坐标每增加一格，需要增加的基础悬停推力。
-        thrustPerYLevel = 0.01,
+        thrustPerYLevel = 0.17,
 
         -- 高度位置误差和垂直速度阻尼增益。
-        altitudeKp = 2.0,
-        altitudeKd = 1.5,
+        altitudeKp = 34.0,
+        altitudeKd = 25.5,
 
         -- 机体倾斜误差和倾斜变化速度阻尼增益。
-        levelKp = 3.0,
-        levelKd = 0.7,
+        levelKp = 51.0,
+        levelKd = 12.0,
 
         -- 水平位置误差和水平速度阻尼增益。
         horizontalKp = 0.15,
@@ -51,14 +64,14 @@ return {
 
         -- 自旋时两组反向旋转螺旋桨之间的推力差。
         -- 增大可提升自旋速度，但过大会造成高度波动。
-        yawThrustDifference = 1,
+        yawThrustDifference = 17,
 
         -- 悬停时的航向保持和自旋速度阻尼增益。
-        yawKp = 1.0,
-        yawKd = 0.4,
+        yawKp = 17.0,
+        yawKd = 7.0,
 
         -- 航向纠偏允许使用的最大差动推力。
-        maxYawCorrection = 1.5,
+        maxYawCorrection = 26,
 
         -- 手动移动时悬停目标的水平和垂直移动速度，单位为格/秒。
         horizontalMoveSpeed = 1.5,
