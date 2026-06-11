@@ -932,13 +932,30 @@ local function updateCurrentTarget()
         local completionDistanceSquared =
             NAVIGATION_COMPLETION_DISTANCE * NAVIGATION_COMPLETION_DISTANCE
         if distanceX * distanceX + distanceZ * distanceZ <= completionDistanceSquared then
+            hoverTargetX = controllerX
+            hoverTargetZ = controllerZ
+            if source == "CUSTOM" then
+                customNavigationTargetX = nil
+                customNavigationTargetZ = nil
+                currentTargetX = nil
+                currentTargetY = nil
+                currentTargetZ = nil
+                currentNavigationSource = nil
+                navigationCompleted = false
+                navigationWasActive = false
+                completedNavigationTargetX = nil
+                completedNavigationTargetY = nil
+                completedNavigationTargetZ = nil
+                completedNavigationSource = nil
+                rednet.send(POWER_CONTROLLER_ID, true, "customnavclear")
+                return
+            end
+
             navigationCompleted = true
             completedNavigationTargetX = x
             completedNavigationTargetY = y
             completedNavigationTargetZ = z
             completedNavigationSource = source
-            hoverTargetX = controllerX
-            hoverTargetZ = controllerZ
         end
     end
 

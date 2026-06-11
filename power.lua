@@ -78,6 +78,11 @@ local function networkLoop()
             else
                 rednet.send(controller, {targetX, targetZ}, "customnav")
             end
+        elseif sender == controller and protocol == "customnavclear" then
+            targetX = nil
+            targetZ = nil
+            statusMessage = "Custom navigation completed"
+            os.queueEvent("power_ui_refresh")
         end
     end
 end
