@@ -98,6 +98,8 @@ local MAX_TILT_ERROR =
     requireConfigType("hover.maxTiltError", hoverConfig.maxTiltError, "number")
 local YAW_THRUST_DIFFERENCE =
     requireConfigType("hover.yawThrustDifference", hoverConfig.yawThrustDifference, "number")
+local REVERSE_YAW_MIXING =
+    requireConfigType("hover.reverseYawMixing", hoverConfig.reverseYawMixing, "boolean")
 local YAW_KP = requireConfigType("hover.yawKp", hoverConfig.yawKp, "number")
 local YAW_KD = requireConfigType("hover.yawKd", hoverConfig.yawKd, "number")
 local MAX_YAW_CORRECTION =
@@ -680,12 +682,15 @@ local function updateHover()
     if yawCommand == 0 then
         local yawError = normalizeAngle(hoverTargetYaw - yaw)
         yawCorrection = clamp(
-            YAW_KP * yawError - YAW_KD * yawRate,
+            -YAW_KP * yawError + YAW_KD * yawRate,
             -MAX_YAW_CORRECTION,
             MAX_YAW_CORRECTION
         )
     else
         yawCorrection = yawCommand * YAW_THRUST_DIFFERENCE
+    end
+    if REVERSE_YAW_MIXING then
+        yawCorrection = -yawCorrection
     end
 
     -- 前后桨逆时针旋转，增强时机体向右自旋；左右桨顺时针旋转，增强时向左自旋。

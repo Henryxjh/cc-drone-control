@@ -72,6 +72,9 @@ return {
         -- 增大可提升自旋速度，但过大会造成高度波动。
         yawThrustDifference = 17,
 
+        -- 四个动力源旋转方向全部与默认假设相反时设为 true。
+        reverseYawMixing = false,
+
         -- 悬停时的航向保持和自旋速度阻尼增益。
         yawKp = 17.0,
         yawKd = 7.0,

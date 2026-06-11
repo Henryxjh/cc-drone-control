@@ -204,12 +204,14 @@ maxTiltError = 0.15
 
 ```lua
 yawThrustDifference = 17
+reverseYawMixing = false
 yawKp = 17.0
 yawKd = 7.0
 maxYawCorrection = 26
 ```
 
 - `yawThrustDifference`：手动自旋时两组反向旋转螺旋桨的推力差
+- `reverseYawMixing`：四个动力源旋转方向全部与默认假设相反时设为 `true`
 - `yawKp`：悬停时保持目标航向的力度
 - `yawKd`：抑制当前自旋角速度
 - `maxYawCorrection`：航向保持允许使用的最大差动推力
@@ -276,6 +278,7 @@ hover = {
     maxTiltError = 0.15,
 
     yawThrustDifference = 17,
+    reverseYawMixing = false,
     yawKp = 12.0,
     yawKd = 4.0,
     maxYawCorrection = 17,
