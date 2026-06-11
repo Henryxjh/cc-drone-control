@@ -242,6 +242,36 @@ if NAVIGATION_COMPLETION_DISTANCE < 0 then
     fatalError("invalid navigation.completionDistance: must be non-negative")
 end
 
+-- 将主控制循环使用的参数收拢到单个表，避免超过 CC:T 的函数 upvalue 限制。
+local flightControl = {
+    baseThrust = BASE_THRUST,
+    baseThrustReferenceY = BASE_THRUST_REFERENCE_Y,
+    thrustPerYLevel = THRUST_PER_Y_LEVEL,
+    altitudeKp = ALTITUDE_KP,
+    altitudeKd = ALTITUDE_KD,
+    levelKp = LEVEL_KP,
+    levelKd = LEVEL_KD,
+    horizontalKp = HORIZONTAL_KP,
+    horizontalKd = HORIZONTAL_KD,
+    maxTiltError = MAX_TILT_ERROR,
+    yawThrustDifference = YAW_THRUST_DIFFERENCE,
+    reverseYawMixing = REVERSE_YAW_MIXING,
+    yawKp = YAW_KP,
+    yawKd = YAW_KD,
+    maxYawCorrection = MAX_YAW_CORRECTION,
+    horizontalMoveSpeed = HORIZONTAL_MOVE_SPEED,
+    maximumClimbRate = MAXIMUM_CLIMB_RATE,
+    maximumDescentRate = MAXIMUM_DESCENT_RATE,
+}
+local safetyControl = {
+    controllerBelowPowerTolerance = CONTROLLER_BELOW_POWER_TOLERANCE,
+    shutdownDelay = SAFETY_SHUTDOWN_DELAY,
+    invertedNormalYThreshold = INVERTED_NORMAL_Y_THRESHOLD,
+    attitudeRecoveryEnabled = ATTITUDE_RECOVERY_ENABLED,
+    recoveryTimeout = RECOVERY_TIMEOUT,
+    recoveryExitNormalY = RECOVERY_EXIT_NORMAL_Y,
+}
+
 local redstoneLogPath = fs.combine(fs.getDir(programPath), REDSTONE_LOG_PATH)
 local previousRedstoneInputs
 
@@ -383,11 +413,13 @@ local powerEnabled
 local safetyShutdown = false
 local unsafePositionSince
 local uprightNormalSign
-local attitudeRecoveryActive = false
-local attitudeRecoveryStartedAt
-local previousRecoveryPitchError
-local previousRecoveryRollError
-local previousRecoveryTime
+local attitudeRecoveryState = {
+    active = false,
+    startedAt = nil,
+    previousPitchError = nil,
+    previousRollError = nil,
+    previousTime = nil,
+}
 local powerControllerX
 local powerControllerY
 local powerControllerZ
@@ -469,20 +501,22 @@ local function resetHoverTarget()
 end
 
 local function resetAttitudeRecovery()
-    attitudeRecoveryActive = false
-    attitudeRecoveryStartedAt = nil
-    previousRecoveryPitchError = nil
-    previousRecoveryRollError = nil
-    previousRecoveryTime = nil
+    attitudeRecoveryState.active = false
+    attitudeRecoveryState.startedAt = nil
+    attitudeRecoveryState.previousPitchError = nil
+    attitudeRecoveryState.previousRollError = nil
+    attitudeRecoveryState.previousTime = nil
 end
 
 local function applyAttitudeRecovery(now, pitchError, rollError)
     local pitchRate = 0
     local rollRate = 0
-    if previousRecoveryTime ~= nil and now > previousRecoveryTime then
-        local deltaTime = now - previousRecoveryTime
-        pitchRate = (pitchError - previousRecoveryPitchError) / deltaTime
-        rollRate = (rollError - previousRecoveryRollError) / deltaTime
+    if attitudeRecoveryState.previousTime ~= nil
+        and now > attitudeRecoveryState.previousTime
+    then
+        local deltaTime = now - attitudeRecoveryState.previousTime
+        pitchRate = (pitchError - attitudeRecoveryState.previousPitchError) / deltaTime
+        rollRate = (rollError - attitudeRecoveryState.previousRollError) / deltaTime
     end
 
     local pitchCorrection = clamp(
@@ -503,9 +537,9 @@ local function applyAttitudeRecovery(now, pitchError, rollError)
     sendSignedMotorSpeed("left", RECOVERY_REVERSE_SPEED + rollCorrection)
     sendSignedMotorSpeed("right", RECOVERY_REVERSE_SPEED - rollCorrection)
 
-    previousRecoveryPitchError = pitchError
-    previousRecoveryRollError = rollError
-    previousRecoveryTime = now
+    attitudeRecoveryState.previousPitchError = pitchError
+    attitudeRecoveryState.previousRollError = rollError
+    attitudeRecoveryState.previousTime = now
 end
 
 local function waitForPowerResponse()
@@ -726,7 +760,7 @@ local function drawPowerUi(message)
         print("SAFETY SHUTDOWN: inverted flight detected")
         print("Restore shape, then press Enter to restart")
         term.setTextColor(previousColor)
-    elseif attitudeRecoveryActive then
+    elseif attitudeRecoveryState.active then
         local previousColor = term.getTextColor()
         term.setTextColor(colors.orange)
         print("")
@@ -793,7 +827,7 @@ local function updateHover()
         controllerZ = nil
         currentRelativeNormalY = nil
         unsafePositionSince = nil
-        if attitudeRecoveryActive then
+        if attitudeRecoveryState.active then
             emergencyPowerOff()
         end
         return
@@ -806,7 +840,7 @@ local function updateHover()
     if propellerPositions == nil then
         currentYaw = nil
         currentRelativeNormalY = nil
-        if attitudeRecoveryActive then
+        if attitudeRecoveryState.active then
             emergencyPowerOff()
         end
         return
@@ -829,7 +863,7 @@ local function updateHover()
         currentYaw = nil
         currentRelativeNormalY = nil
         unsafePositionSince = nil
-        if attitudeRecoveryActive then
+        if attitudeRecoveryState.active then
             emergencyPowerOff()
         end
         return
@@ -857,24 +891,24 @@ local function updateHover()
     local rollError = propellerPositions.left.y - propellerPositions.right.y
     local controllerClearlyBelowPower =
         powerControllerY ~= nil
-        and controllerY + CONTROLLER_BELOW_POWER_TOLERANCE < powerControllerY
+        and controllerY + safetyControl.controllerBelowPowerTolerance < powerControllerY
     local inverted =
         relativeNormalY ~= nil
-        and relativeNormalY < INVERTED_NORMAL_Y_THRESHOLD
+        and relativeNormalY < safetyControl.invertedNormalYThreshold
 
-    if ATTITUDE_RECOVERY_ENABLED and (attitudeRecoveryActive or inverted) then
-        if not attitudeRecoveryActive then
-            attitudeRecoveryActive = true
-            attitudeRecoveryStartedAt = now
-            previousRecoveryPitchError = nil
-            previousRecoveryRollError = nil
-            previousRecoveryTime = nil
+    if safetyControl.attitudeRecoveryEnabled and (attitudeRecoveryState.active or inverted) then
+        if not attitudeRecoveryState.active then
+            attitudeRecoveryState.active = true
+            attitudeRecoveryState.startedAt = now
+            attitudeRecoveryState.previousPitchError = nil
+            attitudeRecoveryState.previousRollError = nil
+            attitudeRecoveryState.previousTime = nil
         end
 
-        if relativeNormalY ~= nil and relativeNormalY >= RECOVERY_EXIT_NORMAL_Y then
+        if relativeNormalY ~= nil and relativeNormalY >= safetyControl.recoveryExitNormalY then
             resetAttitudeRecovery()
             resetHoverTarget()
-        elseif now - attitudeRecoveryStartedAt >= RECOVERY_TIMEOUT then
+        elseif now - attitudeRecoveryState.startedAt >= safetyControl.recoveryTimeout then
             emergencyPowerOff()
             return
         else
@@ -884,7 +918,7 @@ local function updateHover()
         end
     elseif controllerClearlyBelowPower and inverted then
         unsafePositionSince = unsafePositionSince or now
-        if now - unsafePositionSince >= SAFETY_SHUTDOWN_DELAY then
+        if now - unsafePositionSince >= safetyControl.shutdownDelay then
             emergencyPowerOff()
             return
         end
@@ -905,7 +939,7 @@ local function updateHover()
 
     if hoverTargetY == nil then
         hoverTargetX = controllerX
-        hoverTargetY = math.max(controllerY, BASE_THRUST_REFERENCE_Y)
+        hoverTargetY = math.max(controllerY, flightControl.baseThrustReferenceY)
         hoverTargetZ = controllerZ
     end
 
@@ -926,15 +960,15 @@ local function updateHover()
     end
 
     local movementDeltaTime = clamp(deltaTime or 0, 0, 0.5)
-    local forwardDistance = forwardCommand * HORIZONTAL_MOVE_SPEED * movementDeltaTime
-    local rightDistance = rightCommand * HORIZONTAL_MOVE_SPEED * movementDeltaTime
+    local forwardDistance = forwardCommand * flightControl.horizontalMoveSpeed * movementDeltaTime
+    local rightDistance = rightCommand * flightControl.horizontalMoveSpeed * movementDeltaTime
     hoverTargetX = hoverTargetX + forwardX * forwardDistance + rightX * rightDistance
     if verticalCommand > 0 then
-        hoverTargetY = hoverTargetY + MAXIMUM_CLIMB_RATE * movementDeltaTime
+        hoverTargetY = hoverTargetY + flightControl.maximumClimbRate * movementDeltaTime
     elseif verticalCommand < 0 then
         hoverTargetY = math.max(
-            BASE_THRUST_REFERENCE_Y,
-            hoverTargetY - MAXIMUM_DESCENT_RATE * movementDeltaTime
+            flightControl.baseThrustReferenceY,
+            hoverTargetY - flightControl.maximumDescentRate * movementDeltaTime
         )
     end
     hoverTargetZ = hoverTargetZ + forwardZ * forwardDistance + rightZ * rightDistance
@@ -967,34 +1001,44 @@ local function updateHover()
     local rightVelocity = velocityX * rightX + velocityZ * rightZ
 
     local forwardPositionCommand =
-        HORIZONTAL_KP * forwardPositionError - HORIZONTAL_KD * forwardVelocity
+        flightControl.horizontalKp * forwardPositionError
+            - flightControl.horizontalKd * forwardVelocity
     local rightPositionCommand =
-        HORIZONTAL_KP * rightPositionError - HORIZONTAL_KD * rightVelocity
+        flightControl.horizontalKp * rightPositionError
+            - flightControl.horizontalKd * rightVelocity
     local desiredPitchError =
-        -clamp(forwardPositionCommand, -MAX_TILT_ERROR, MAX_TILT_ERROR)
+        -clamp(
+            forwardPositionCommand,
+            -flightControl.maxTiltError,
+            flightControl.maxTiltError
+        )
     local desiredRollError =
-        clamp(rightPositionCommand, -MAX_TILT_ERROR, MAX_TILT_ERROR)
+        clamp(rightPositionCommand, -flightControl.maxTiltError, flightControl.maxTiltError)
 
     local altitudeCorrection =
-        ALTITUDE_KP * (hoverTargetY - controllerY) - ALTITUDE_KD * verticalVelocity
+        flightControl.altitudeKp * (hoverTargetY - controllerY)
+            - flightControl.altitudeKd * verticalVelocity
     local hoverThrust =
-        BASE_THRUST + (hoverTargetY - BASE_THRUST_REFERENCE_Y) * THRUST_PER_Y_LEVEL
+        flightControl.baseThrust
+            + (hoverTargetY - flightControl.baseThrustReferenceY) * flightControl.thrustPerYLevel
     local pitchCorrection =
-        -LEVEL_KP * (pitchError - desiredPitchError) - LEVEL_KD * pitchRate
+        -flightControl.levelKp * (pitchError - desiredPitchError)
+            - flightControl.levelKd * pitchRate
     local rollCorrection =
-        -LEVEL_KP * (rollError - desiredRollError) - LEVEL_KD * rollRate
+        -flightControl.levelKp * (rollError - desiredRollError)
+            - flightControl.levelKd * rollRate
     local yawCorrection
     if yawCommand == 0 then
         local yawError = normalizeAngle(hoverTargetYaw - yaw)
         yawCorrection = clamp(
-            -YAW_KP * yawError + YAW_KD * yawRate,
-            -MAX_YAW_CORRECTION,
-            MAX_YAW_CORRECTION
+            -flightControl.yawKp * yawError + flightControl.yawKd * yawRate,
+            -flightControl.maxYawCorrection,
+            flightControl.maxYawCorrection
         )
     else
-        yawCorrection = yawCommand * YAW_THRUST_DIFFERENCE
+        yawCorrection = yawCommand * flightControl.yawThrustDifference
     end
-    if REVERSE_YAW_MIXING then
+    if flightControl.reverseYawMixing then
         yawCorrection = -yawCorrection
     end
 
