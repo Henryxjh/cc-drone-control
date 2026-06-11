@@ -10,6 +10,11 @@ return {
     -- Block Reader 必须读取的方块注册名。
     navigationTableBlock = "simulated:navigation_table",
 
+    navigation = {
+        -- 与 Navigation Table 目标的水平距离不超过此值时，视为导航完成。
+        completionDistance = 1.0,
+    },
+
     -- 四个动力控制器的计算机 ID。
     motorControllers = {
         left = 2,

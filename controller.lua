@@ -35,6 +35,8 @@ local propulsionConfig = requireConfigType("propulsion", config.propulsion, "tab
 local debugConfig = requireConfigType("debug", config.debug, "table")
 local safetyConfig = config.safety or {}
 requireConfigType("safety", safetyConfig, "table")
+local navigationConfig = config.navigation or {}
+requireConfigType("navigation", navigationConfig, "table")
 local motorControllers =
     requireConfigType("motorControllers", config.motorControllers, "table")
 
@@ -48,6 +50,14 @@ local REDSTONE_RELAY_RIGHT_SIDE =
     requireConfigType("peripherals.redstoneRelayRight", peripherals.redstoneRelayRight, "string")
 local NAVIGATION_TABLE_BLOCK =
     requireConfigType("navigationTableBlock", config.navigationTableBlock, "string")
+local NAVIGATION_COMPLETION_DISTANCE =
+    navigationConfig.completionDistance == nil
+    and 1.0
+    or requireConfigType(
+            "navigation.completionDistance",
+            navigationConfig.completionDistance,
+            "number"
+        )
 
 requireConfigType("motorControllers.left", motorControllers.left, "number")
 requireConfigType("motorControllers.right", motorControllers.right, "number")
@@ -147,6 +157,9 @@ end
 if INVERTED_NORMAL_Y_THRESHOLD < -1 or INVERTED_NORMAL_Y_THRESHOLD >= 0 then
     fatalError("invalid safety.invertedNormalYThreshold: expected -1 <= value < 0")
 end
+if NAVIGATION_COMPLETION_DISTANCE < 0 then
+    fatalError("invalid navigation.completionDistance: must be non-negative")
+end
 
 local redstoneLogPath = fs.combine(fs.getDir(programPath), REDSTONE_LOG_PATH)
 local previousRedstoneInputs
@@ -235,6 +248,9 @@ local allSignalsToggleLatched = false
 local manualControlActive = false
 local navigationWasActive = false
 local navigationResetPending = false
+local navigationCompleted = false
+local completedNavigationTargetX
+local completedNavigationTargetZ
 local manualNavigationPauseUntil = 0
 
 local function moveBackward()
@@ -526,6 +542,11 @@ local function drawPowerUi(message)
 
     if currentTargetX == nil or currentTargetZ == nil then
         print("Navigation target: NONE")
+    elseif navigationCompleted then
+        print(("Navigation target: %.2f %.2f COMPLETE"):format(
+            currentTargetX,
+            currentTargetZ
+        ))
     else
         print(("Navigation target: %.2f %.2f"):format(currentTargetX, currentTargetZ))
     end
@@ -731,7 +752,11 @@ local function updateHover()
     -- 自动导航仅控制水平位置；任意手动操作会暂停本周期的自动导航。
     local manualNavigationPaused =
         manualControlActive or os.epoch("utc") < manualNavigationPauseUntil
-    if currentTargetX ~= nil and currentTargetZ ~= nil and not manualNavigationPaused then
+    if currentTargetX ~= nil
+        and currentTargetZ ~= nil
+        and not navigationCompleted
+        and not manualNavigationPaused
+    then
         hoverTargetX = currentTargetX
         hoverTargetZ = currentTargetZ
     end
@@ -827,6 +852,9 @@ local function updateCurrentTarget()
         currentTargetY = nil
         currentTargetZ = nil
         navigationWasActive = false
+        navigationCompleted = false
+        completedNavigationTargetX = nil
+        completedNavigationTargetZ = nil
         return
     end
 
@@ -840,14 +868,41 @@ local function updateCurrentTarget()
         currentTargetY = nil
         currentTargetZ = nil
         navigationWasActive = false
+        navigationCompleted = false
+        completedNavigationTargetX = nil
+        completedNavigationTargetZ = nil
         return
+    end
+
+    local targetChanged =
+        completedNavigationTargetX ~= nil
+        and (x ~= completedNavigationTargetX or z ~= completedNavigationTargetZ)
+    if targetChanged then
+        navigationCompleted = false
+        completedNavigationTargetX = nil
+        completedNavigationTargetZ = nil
     end
 
     currentTargetX = x
     currentTargetY = y
     currentTargetZ = z
-    navigationWasActive = true
     navigationResetPending = false
+
+    if not navigationCompleted and controllerX ~= nil and controllerZ ~= nil then
+        local distanceX = x - controllerX
+        local distanceZ = z - controllerZ
+        local completionDistanceSquared =
+            NAVIGATION_COMPLETION_DISTANCE * NAVIGATION_COMPLETION_DISTANCE
+        if distanceX * distanceX + distanceZ * distanceZ <= completionDistanceSquared then
+            navigationCompleted = true
+            completedNavigationTargetX = x
+            completedNavigationTargetZ = z
+            hoverTargetX = controllerX
+            hoverTargetZ = controllerZ
+        end
+    end
+
+    navigationWasActive = not navigationCompleted
 end
 
 local function controlLoop()
