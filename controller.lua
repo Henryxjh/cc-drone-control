@@ -204,6 +204,10 @@ local forwardCommand = 0
 local rightCommand = 0
 local verticalCommand = 0
 local allSignalsToggleLatched = false
+local manualControlActive = false
+local navigationWasActive = false
+local navigationResetPending = false
+local manualNavigationPauseUntil = 0
 
 local function moveBackward()
     forwardCommand = -1
@@ -363,6 +367,7 @@ local function adjustHoverTarget(key)
         else
             hoverTargetYaw = normalizeAngle(hoverTargetYaw - oneDegree)
         end
+        manualNavigationPauseUntil = os.epoch("utc") + 250
         return true
     end
 
@@ -386,6 +391,7 @@ local function adjustHoverTarget(key)
         return false
     end
 
+    manualNavigationPauseUntil = os.epoch("utc") + 250
     return true
 end
 
@@ -485,6 +491,12 @@ local function drawPowerUi(message)
             hoverTargetY,
             hoverTargetZ
         ))
+    end
+
+    if currentTargetX == nil or currentTargetZ == nil then
+        print("Navigation target: NONE")
+    else
+        print(("Navigation target: %.2f %.2f"):format(currentTargetX, currentTargetZ))
     end
 
     local currentHeading = yawToHeading(currentYaw)
@@ -660,6 +672,14 @@ local function updateHover()
     end
     hoverTargetZ = hoverTargetZ + forwardZ * forwardDistance + rightZ * rightDistance
 
+    -- 自动导航仅控制水平位置；任意手动操作会暂停本周期的自动导航。
+    local manualNavigationPaused =
+        manualControlActive or os.epoch("utc") < manualNavigationPauseUntil
+    if currentTargetX ~= nil and currentTargetZ ~= nil and not manualNavigationPaused then
+        hoverTargetX = currentTargetX
+        hoverTargetZ = currentTargetZ
+    end
+
     local yaw = currentYaw
     if hoverTargetYaw == nil or yawCommand ~= 0 then
         hoverTargetYaw = yaw
@@ -739,9 +759,18 @@ local function updateCurrentTarget()
     local currentStack = navigationData and navigationData.CurrentStack
 
     if type(currentStack) ~= "table" or next(currentStack) == nil then
+        if navigationWasActive then
+            navigationResetPending = true
+        end
+        if navigationResetPending and controllerX ~= nil and controllerZ ~= nil then
+            hoverTargetX = controllerX
+            hoverTargetZ = controllerZ
+            navigationResetPending = false
+        end
         currentTargetX = nil
         currentTargetY = nil
         currentTargetZ = nil
+        navigationWasActive = false
         return
     end
 
@@ -750,16 +779,19 @@ local function updateCurrentTarget()
     local y = target and (target.y or target.Y or target[2])
     local z = target and (target.z or target.Z or target[3])
 
-    if type(x) ~= "number" or type(y) ~= "number" or type(z) ~= "number" then
+    if type(x) ~= "number" or type(z) ~= "number" then
         currentTargetX = nil
         currentTargetY = nil
         currentTargetZ = nil
+        navigationWasActive = false
         return
     end
 
     currentTargetX = x
     currentTargetY = y
     currentTargetZ = z
+    navigationWasActive = true
+    navigationResetPending = false
 end
 
 local function controlLoop()
@@ -779,6 +811,15 @@ local function controlLoop()
             and forward
             and left
             and right
+        manualControlActive =
+            backward
+            or forward
+            or left
+            or right
+            or rotateLeftInput
+            or rotateRightInput
+            or up
+            or down
 
         logRedstoneInputs({
             backward = backward,

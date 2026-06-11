@@ -77,6 +77,19 @@ redstoneLogging = false
 
 组合键触发时，前后和左右信号两两互斥，因此不会产生移动命令。旋转与升降信号不参与组合键判断。
 
+## Navigation Table 自动导航
+
+当 `simulated:navigation_table` 的 `CurrentStack` 包含物品，并且 `CurrentTarget` 包含有效 X/Z 坐标时，控制器会持续将悬停目标的 X/Z 设置为导航坐标。
+
+- Navigation Table 的 Y 坐标会被忽略
+- 当前悬停目标高度保持不变
+- 自动导航激活期间，检测到任意红石手动控制时暂停本控制周期的自动导航
+- Shell 微调按键触发后会短暂暂停自动导航
+- 松开手动控制后，只要 Navigation Table 仍有目标，自动导航会恢复
+- Navigation Table 变为空时，停止自动导航并将悬停目标 X/Z 设置为当前控制器坐标
+- Navigation Table 的清空操作不会改变当前悬停目标高度
+- UI 中的 `Navigation target` 显示当前自动导航目标
+
 ## Shell 悬停目标微调
 
 在控制器 UI 中可以通过键盘按格调整当前悬停目标：
