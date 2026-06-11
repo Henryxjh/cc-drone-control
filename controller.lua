@@ -243,7 +243,6 @@ local hoverTargetYaw
 local previousYaw
 local powerEnabled
 local safetyShutdown = false
-local manualPowerToggleRequested = false
 local powerControllerX
 local powerControllerY
 local powerControllerZ
@@ -311,12 +310,9 @@ local function waitForPowerResponse()
         if not state then
             stopAllMotors()
         elseif wasEnabled == false then
-            resetHoverTarget()
-            if manualPowerToggleRequested then
-                safetyShutdown = false
-            end
+            -- 完整重启控制器，以重新加载配置、外设引用和所有控制参数。
+            os.reboot()
         end
-        manualPowerToggleRequested = false
         return true
     end
 
@@ -329,13 +325,8 @@ local function requestPowerStatus()
 end
 
 local function togglePower()
-    manualPowerToggleRequested = true
     rednet.send(POWER_CONTROLLER_ID, true, "power")
-    local responseReceived = waitForPowerResponse()
-    if not responseReceived then
-        manualPowerToggleRequested = false
-    end
-    return responseReceived
+    return waitForPowerResponse()
 end
 
 local function emergencyPowerOff()
@@ -721,7 +712,6 @@ local function controlLoop()
 
         if allSignalsActive and not allSignalsToggleLatched then
             allSignalsToggleLatched = true
-            manualPowerToggleRequested = true
             rednet.send(POWER_CONTROLLER_ID, true, "power")
         elseif not allSignalsActive then
             allSignalsToggleLatched = false
