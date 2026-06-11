@@ -321,7 +321,31 @@ hover = {
 
 电源从关闭切换到开启后，主控制器会自动重启并重新加载 `controller-config.lua`。电源控制器保持开启；主控制器启动后会使用新的 GPS 坐标和航向作为悬停目标。
 
-当主控制器的 Y 坐标低于电源控制器的 Y 坐标时，安全保护会关闭电源和四个螺旋桨动力。恢复机体形态后必须按 Enter 手动重新开启电源；安全保护不会自动重新开机。
+## 翻转安全停机
+
+```lua
+safety = {
+    controllerBelowPowerTolerance = 0.75,
+    shutdownDelay = 1.5,
+    invertedNormalYThreshold = -0.1,
+}
+```
+
+控制器启动后会根据四个螺旋桨坐标记录正常朝上的桨平面方向。仅当以下条件同时满足时，
+安全保护才会关闭电源和四个螺旋桨动力：
+
+1. 主控制器低于电源控制器超过 `controllerBelowPowerTolerance`
+2. 桨平面相对启动姿态已经翻转，法向量 Y 分量低于 `invertedNormalYThreshold`
+3. 异常状态持续时间达到 `shutdownDelay`
+
+- `controllerBelowPowerTolerance`：过滤水平移动倾斜和 GPS 抖动造成的小幅高度交叉
+- `shutdownDelay`：过滤短暂倾斜；设置过大将延迟真正翻转后的停机
+- `invertedNormalYThreshold`：负数越小，机体必须翻转得越严重才会停机
+- 长时间水平移动仍会误触发时，优先略微增大 `controllerBelowPowerTolerance`
+- 正常水平移动的机体仍然朝上，因此即使持续移动也不会触发安全停机
+- 开启控制器电源时，应确保机体处于正常朝上的形态
+
+恢复机体形态后必须按 Enter 手动重新开启电源；安全保护不会自动重新开机。
 
 ## 计算每格动力增长率
 

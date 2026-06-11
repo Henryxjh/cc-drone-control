@@ -33,6 +33,8 @@ local peripherals = requireConfigType("peripherals", config.peripherals, "table"
 local hoverConfig = requireConfigType("hover", config.hover, "table")
 local propulsionConfig = requireConfigType("propulsion", config.propulsion, "table")
 local debugConfig = requireConfigType("debug", config.debug, "table")
+local safetyConfig = config.safety or {}
+requireConfigType("safety", safetyConfig, "table")
 local motorControllers =
     requireConfigType("motorControllers", config.motorControllers, "table")
 
@@ -110,6 +112,26 @@ local MAXIMUM_CLIMB_RATE =
     requireConfigType("hover.maximumClimbRate", hoverConfig.maximumClimbRate, "number")
 local MAXIMUM_DESCENT_RATE =
     requireConfigType("hover.maximumDescentRate", hoverConfig.maximumDescentRate, "number")
+local CONTROLLER_BELOW_POWER_TOLERANCE =
+    safetyConfig.controllerBelowPowerTolerance == nil
+    and 0.75
+    or requireConfigType(
+            "safety.controllerBelowPowerTolerance",
+            safetyConfig.controllerBelowPowerTolerance,
+            "number"
+        )
+local SAFETY_SHUTDOWN_DELAY =
+    safetyConfig.shutdownDelay == nil
+    and 1.5
+    or requireConfigType("safety.shutdownDelay", safetyConfig.shutdownDelay, "number")
+local INVERTED_NORMAL_Y_THRESHOLD =
+    safetyConfig.invertedNormalYThreshold == nil
+    and -0.1
+    or requireConfigType(
+            "safety.invertedNormalYThreshold",
+            safetyConfig.invertedNormalYThreshold,
+            "number"
+        )
 local BALANCE_TIMEOUT = requireConfigType("balanceTimeout", config.balanceTimeout, "number")
 local GPS_TIMEOUT = requireConfigType("gpsTimeout", config.gpsTimeout, "number")
 
@@ -118,6 +140,12 @@ if BASE_THRUST < MINIMUM_FLIGHT_SPEED or BASE_THRUST > MAXIMUM_FLIGHT_SPEED then
 end
 if MAXIMUM_CLIMB_RATE < 0 or MAXIMUM_DESCENT_RATE < 0 then
     fatalError("invalid vertical rate: maximum climb/descent rates must be non-negative")
+end
+if CONTROLLER_BELOW_POWER_TOLERANCE < 0 or SAFETY_SHUTDOWN_DELAY < 0 then
+    fatalError("invalid safety config: tolerance and shutdown delay must be non-negative")
+end
+if INVERTED_NORMAL_Y_THRESHOLD < -1 or INVERTED_NORMAL_Y_THRESHOLD >= 0 then
+    fatalError("invalid safety.invertedNormalYThreshold: expected -1 <= value < 0")
 end
 
 local redstoneLogPath = fs.combine(fs.getDir(programPath), REDSTONE_LOG_PATH)
@@ -255,6 +283,8 @@ local previousYaw
 local currentYaw
 local powerEnabled
 local safetyShutdown = false
+local unsafePositionSince
+local uprightNormalSign
 local powerControllerX
 local powerControllerY
 local powerControllerZ
@@ -326,6 +356,7 @@ local function resetHoverTarget()
     previousHoverTime = nil
     hoverTargetYaw = nil
     previousYaw = nil
+    unsafePositionSince = nil
 end
 
 local function waitForPowerResponse()
@@ -531,7 +562,7 @@ local function drawPowerUi(message)
         local previousColor = term.getTextColor()
         term.setTextColor(colors.red)
         print("")
-        print("SAFETY SHUTDOWN: controller below power controller")
+        print("SAFETY SHUTDOWN: inverted flight detected")
         print("Restore shape, then press Enter to restart")
         term.setTextColor(previousColor)
     end
@@ -593,6 +624,7 @@ local function updateHover()
         controllerX = nil
         controllerY = nil
         controllerZ = nil
+        unsafePositionSince = nil
         return
     end
     controllerX = locatedX
@@ -606,15 +638,28 @@ local function updateHover()
     end
 
     local forwardX = propellerPositions.front.x - propellerPositions.back.x
+    local forwardY = propellerPositions.front.y - propellerPositions.back.y
     local forwardZ = propellerPositions.front.z - propellerPositions.back.z
     local forwardLength = math.sqrt(forwardX * forwardX + forwardZ * forwardZ)
     local rightX = propellerPositions.right.x - propellerPositions.left.x
+    local rightY = propellerPositions.right.y - propellerPositions.left.y
     local rightZ = propellerPositions.right.z - propellerPositions.left.z
     local rightLength = math.sqrt(rightX * rightX + rightZ * rightZ)
+    local forwardLength3d =
+        math.sqrt(forwardX * forwardX + forwardY * forwardY + forwardZ * forwardZ)
+    local rightLength3d =
+        math.sqrt(rightX * rightX + rightY * rightY + rightZ * rightZ)
 
-    if forwardLength == 0 or rightLength == 0 then
+    if forwardLength == 0 or rightLength == 0 or forwardLength3d == 0 or rightLength3d == 0 then
         currentYaw = nil
+        unsafePositionSince = nil
         return
+    end
+
+    local normalY =
+        (forwardZ * rightX - forwardX * rightZ) / (forwardLength3d * rightLength3d)
+    if uprightNormalSign == nil and math.abs(normalY) >= 0.25 then
+        uprightNormalSign = normalY >= 0 and 1 or -1
     end
 
     forwardX = forwardX / forwardLength
@@ -627,12 +672,23 @@ local function updateHover()
         return
     end
 
-    if powerControllerY ~= nil and controllerY < powerControllerY then
-        emergencyPowerOff()
-        return
+    local now = os.epoch("utc") / 1000
+    local controllerClearlyBelowPower =
+        powerControllerY ~= nil
+        and controllerY + CONTROLLER_BELOW_POWER_TOLERANCE < powerControllerY
+    local inverted =
+        uprightNormalSign ~= nil
+        and normalY * uprightNormalSign < INVERTED_NORMAL_Y_THRESHOLD
+    if controllerClearlyBelowPower and inverted then
+        unsafePositionSince = unsafePositionSince or now
+        if now - unsafePositionSince >= SAFETY_SHUTDOWN_DELAY then
+            emergencyPowerOff()
+            return
+        end
+    else
+        unsafePositionSince = nil
     end
 
-    local now = os.epoch("utc") / 1000
     if hoverTargetY == nil then
         hoverTargetX = controllerX
         hoverTargetY = math.max(controllerY, BASE_THRUST_REFERENCE_Y)

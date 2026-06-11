@@ -33,6 +33,17 @@ return {
         redstoneLogPath = "redstone-input.log",
     },
 
+    safety = {
+        -- 主控制器低于电源控制器超过此高度差时，才视为可能翻转。
+        controllerBelowPowerTolerance = 0.75,
+
+        -- 异常姿态必须持续达到此秒数才执行安全停机。
+        shutdownDelay = 1.5,
+
+        -- 相对桨平面法向量的 Y 分量低于此值时，才视为已经翻转。
+        invertedNormalYThreshold = -0.1,
+    },
+
     propulsion = {
         -- 电机协议支持的完整速度范围。
         minimumSpeed = -256,
