@@ -1,8 +1,14 @@
 local controller = 1
 local position = "left"
+local reverse = false
 
 local modem = peripheral.find("modem")
 if modem == nil or not modem.isWireless() then
+    os.reboot()
+end
+
+local motor = peripheral.wrap("bottom")
+if motor == nil or peripheral.getType("bottom") ~= "electric_motor" then
     os.reboot()
 end
 
@@ -16,7 +22,11 @@ while true do
         goto continue
     end
     if (sender == controller and rprotocol == position) then
-        redstone.setAnalogOutput("top", message)
+        if reverse then
+            motor.setSpeed(0 - message)
+        else
+            motor.setSpeed(message)
+        end
         goto continue
     end
     ::continue::
