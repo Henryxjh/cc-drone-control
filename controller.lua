@@ -104,13 +104,18 @@ local MAX_YAW_CORRECTION =
     requireConfigType("hover.maxYawCorrection", hoverConfig.maxYawCorrection, "number")
 local HORIZONTAL_MOVE_SPEED =
     requireConfigType("hover.horizontalMoveSpeed", hoverConfig.horizontalMoveSpeed, "number")
-local VERTICAL_MOVE_SPEED =
-    requireConfigType("hover.verticalMoveSpeed", hoverConfig.verticalMoveSpeed, "number")
+local MAXIMUM_CLIMB_RATE =
+    requireConfigType("hover.maximumClimbRate", hoverConfig.maximumClimbRate, "number")
+local MAXIMUM_DESCENT_RATE =
+    requireConfigType("hover.maximumDescentRate", hoverConfig.maximumDescentRate, "number")
 local BALANCE_TIMEOUT = requireConfigType("balanceTimeout", config.balanceTimeout, "number")
 local GPS_TIMEOUT = requireConfigType("gpsTimeout", config.gpsTimeout, "number")
 
 if BASE_THRUST < MINIMUM_FLIGHT_SPEED or BASE_THRUST > MAXIMUM_FLIGHT_SPEED then
     fatalError("invalid hover.baseThrust: outside normal flight speed range")
+end
+if MAXIMUM_CLIMB_RATE < 0 or MAXIMUM_DESCENT_RATE < 0 then
+    fatalError("invalid vertical rate: maximum climb/descent rates must be non-negative")
 end
 
 local redstoneLogPath = fs.combine(fs.getDir(programPath), REDSTONE_LOG_PATH)
@@ -600,10 +605,14 @@ local function updateHover()
     local forwardDistance = forwardCommand * HORIZONTAL_MOVE_SPEED * movementDeltaTime
     local rightDistance = rightCommand * HORIZONTAL_MOVE_SPEED * movementDeltaTime
     hoverTargetX = hoverTargetX + forwardX * forwardDistance + rightX * rightDistance
-    hoverTargetY = math.max(
-        BASE_THRUST_REFERENCE_Y,
-        hoverTargetY + verticalCommand * VERTICAL_MOVE_SPEED * movementDeltaTime
-    )
+    if verticalCommand > 0 then
+        hoverTargetY = hoverTargetY + MAXIMUM_CLIMB_RATE * movementDeltaTime
+    elseif verticalCommand < 0 then
+        hoverTargetY = math.max(
+            BASE_THRUST_REFERENCE_Y,
+            hoverTargetY - MAXIMUM_DESCENT_RATE * movementDeltaTime
+        )
+    end
     hoverTargetZ = hoverTargetZ + forwardZ * forwardDistance + rightZ * rightDistance
 
     local yaw = math.atan2(forwardZ, forwardX)

@@ -79,8 +79,11 @@ return {
         -- 航向纠偏允许使用的最大差动推力。
         maxYawCorrection = 26,
 
-        -- 手动移动时悬停目标的水平和垂直移动速度，单位为格/秒。
+        -- 手动移动时悬停目标的水平移动速度，单位为格/秒。
         horizontalMoveSpeed = 1.5,
-        verticalMoveSpeed = 1.0,
+
+        -- 手动升降时悬停目标的最大上升率和最大下降率，单位为格/秒。
+        maximumClimbRate = 1.0,
+        maximumDescentRate = 1.0,
     },
 }

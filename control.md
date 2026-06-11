@@ -229,13 +229,15 @@ maxYawCorrection = 26
 
 ```lua
 horizontalMoveSpeed = 1.5
-verticalMoveSpeed = 1.0
+maximumClimbRate = 1.0
+maximumDescentRate = 1.0
 ```
 
 单位为格/秒。
 
 - `horizontalMoveSpeed`：前进、后退和左右平移速度
-- `verticalMoveSpeed`：上升和下降速度
+- `maximumClimbRate`：上升时目标高度每秒最多增加的格数
+- `maximumDescentRate`：下降时目标高度每秒最多减少的格数
 
 这些参数控制悬停目标的移动速度，不直接设置螺旋桨推力。速度过高会造成较大的位置误差和倾斜。
 
@@ -279,7 +281,8 @@ hover = {
     maxYawCorrection = 17,
 
     horizontalMoveSpeed = 1.0,
-    verticalMoveSpeed = 0.75,
+    maximumClimbRate = 0.75,
+    maximumDescentRate = 0.75,
 }
 ```
 
