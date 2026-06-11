@@ -48,6 +48,31 @@ local reverse = false
 - `Real` 表示动力控制器通过 `electric_motor.getSpeed()` 返回的实际速度
 - `Real` 为 `?` 表示对应动力控制器未在超时前响应
 
+## 红石输入调试日志
+
+在配置文件中开启：
+
+```lua
+debug = {
+    redstoneLogging = true,
+    redstoneLogPath = "redstone-input.log",
+}
+```
+
+日志路径相对于 `controller.lua` 所在目录。控制器启动后会记录八路红石输入的初始状态，之后仅在状态发生变化时追加日志，避免每个控制循环都写入文件。
+
+日志示例：
+
+```text
+[1750000000000] backward=false forward=true left=false right=false rotateLeft=false rotateRight=false up=false down=false
+```
+
+关闭调试时设置：
+
+```lua
+redstoneLogging = false
+```
+
 ## 推荐调参顺序
 
 1. 校准基础悬停推力。

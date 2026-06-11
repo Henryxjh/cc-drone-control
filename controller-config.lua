@@ -27,6 +27,12 @@ return {
     gpsTimeout = 0.25,
     uiRefreshInterval = 0.5,
 
+    debug = {
+        -- 开启后，将红石控制输入的变化写入独立日志文件。
+        redstoneLogging = false,
+        redstoneLogPath = "redstone-input.log",
+    },
+
     propulsion = {
         -- 电机协议支持的完整速度范围。
         minimumSpeed = -256,

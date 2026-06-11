@@ -32,6 +32,7 @@ requireConfigType("config", config, "table")
 local peripherals = requireConfigType("peripherals", config.peripherals, "table")
 local hoverConfig = requireConfigType("hover", config.hover, "table")
 local propulsionConfig = requireConfigType("propulsion", config.propulsion, "table")
+local debugConfig = requireConfigType("debug", config.debug, "table")
 local motorControllers =
     requireConfigType("motorControllers", config.motorControllers, "table")
 
@@ -57,6 +58,10 @@ local POWER_RESPONSE_TIMEOUT =
     requireConfigType("powerResponseTimeout", config.powerResponseTimeout, "number")
 local UI_REFRESH_INTERVAL =
     requireConfigType("uiRefreshInterval", config.uiRefreshInterval, "number")
+local REDSTONE_LOGGING_ENABLED =
+    requireConfigType("debug.redstoneLogging", debugConfig.redstoneLogging, "boolean")
+local REDSTONE_LOG_PATH =
+    requireConfigType("debug.redstoneLogPath", debugConfig.redstoneLogPath, "string")
 local MINIMUM_MOTOR_SPEED =
     requireConfigType("propulsion.minimumSpeed", propulsionConfig.minimumSpeed, "number")
 local MAXIMUM_MOTOR_SPEED =
@@ -106,6 +111,54 @@ local GPS_TIMEOUT = requireConfigType("gpsTimeout", config.gpsTimeout, "number")
 
 if BASE_THRUST < MINIMUM_FLIGHT_SPEED or BASE_THRUST > MAXIMUM_FLIGHT_SPEED then
     fatalError("invalid hover.baseThrust: outside normal flight speed range")
+end
+
+local redstoneLogPath = fs.combine(fs.getDir(programPath), REDSTONE_LOG_PATH)
+local previousRedstoneInputs
+
+local function logRedstoneInputs(inputs)
+    if not REDSTONE_LOGGING_ENABLED then
+        return
+    end
+
+    local changed = previousRedstoneInputs == nil
+    if previousRedstoneInputs then
+        for name, value in pairs(inputs) do
+            if previousRedstoneInputs[name] ~= value then
+                changed = true
+                break
+            end
+        end
+    end
+
+    if not changed then
+        return
+    end
+
+    local file = fs.open(redstoneLogPath, "a")
+    if file == nil then
+        fatalError("failed to open redstone log: " .. redstoneLogPath)
+    end
+
+    file.writeLine((
+        "[%d] backward=%s forward=%s left=%s right=%s rotateLeft=%s rotateRight=%s up=%s down=%s"
+    ):format(
+        os.epoch("utc"),
+        tostring(inputs.backward),
+        tostring(inputs.forward),
+        tostring(inputs.left),
+        tostring(inputs.right),
+        tostring(inputs.rotateLeft),
+        tostring(inputs.rotateRight),
+        tostring(inputs.up),
+        tostring(inputs.down)
+    ))
+    file.close()
+
+    previousRedstoneInputs = {}
+    for name, value in pairs(inputs) do
+        previousRedstoneInputs[name] = value
+    end
 end
 
 local modem = peripheral.find("modem")
@@ -642,6 +695,17 @@ local function controlLoop()
         local right = redstoneRelayRight.getInput("right")
         local rotateRightInput = redstoneRelayRight.getInput("top")
         local down = redstoneRelayRight.getInput("bottom")
+
+        logRedstoneInputs({
+            backward = backward,
+            forward = forward,
+            left = left,
+            right = right,
+            rotateLeft = rotateLeftInput,
+            rotateRight = rotateRightInput,
+            up = up,
+            down = down,
+        })
 
         yawCommand = 0
         forwardCommand = 0
