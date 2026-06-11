@@ -35,6 +35,8 @@ local propulsionConfig = requireConfigType("propulsion", config.propulsion, "tab
 local debugConfig = requireConfigType("debug", config.debug, "table")
 local safetyConfig = config.safety or {}
 requireConfigType("safety", safetyConfig, "table")
+local attitudeRecoveryConfig = safetyConfig.attitudeRecovery or {}
+requireConfigType("safety.attitudeRecovery", attitudeRecoveryConfig, "table")
 local navigationConfig = config.navigation or {}
 requireConfigType("navigation", navigationConfig, "table")
 local motorControllers =
@@ -142,6 +144,70 @@ local INVERTED_NORMAL_Y_THRESHOLD =
             safetyConfig.invertedNormalYThreshold,
             "number"
         )
+local ATTITUDE_RECOVERY_ENABLED =
+    attitudeRecoveryConfig.enabled == nil
+    and false
+    or requireConfigType(
+            "safety.attitudeRecovery.enabled",
+            attitudeRecoveryConfig.enabled,
+            "boolean"
+        )
+local RECOVERY_REVERSE_SPEED =
+    attitudeRecoveryConfig.reverseSpeed == nil
+    and -80
+    or requireConfigType(
+            "safety.attitudeRecovery.reverseSpeed",
+            attitudeRecoveryConfig.reverseSpeed,
+            "number"
+        )
+local RECOVERY_LEVEL_KP =
+    attitudeRecoveryConfig.levelKp == nil
+    and 20
+    or requireConfigType(
+            "safety.attitudeRecovery.levelKp",
+            attitudeRecoveryConfig.levelKp,
+            "number"
+        )
+local RECOVERY_LEVEL_KD =
+    attitudeRecoveryConfig.levelKd == nil
+    and 5
+    or requireConfigType(
+            "safety.attitudeRecovery.levelKd",
+            attitudeRecoveryConfig.levelKd,
+            "number"
+        )
+local RECOVERY_MAX_CORRECTION =
+    attitudeRecoveryConfig.maxCorrection == nil
+    and 80
+    or requireConfigType(
+            "safety.attitudeRecovery.maxCorrection",
+            attitudeRecoveryConfig.maxCorrection,
+            "number"
+        )
+local RECOVERY_PITCH_BIAS =
+    attitudeRecoveryConfig.pitchBias == nil
+    and 20
+    or requireConfigType(
+            "safety.attitudeRecovery.pitchBias",
+            attitudeRecoveryConfig.pitchBias,
+            "number"
+        )
+local RECOVERY_TIMEOUT =
+    attitudeRecoveryConfig.timeout == nil
+    and 2.5
+    or requireConfigType(
+            "safety.attitudeRecovery.timeout",
+            attitudeRecoveryConfig.timeout,
+            "number"
+        )
+local RECOVERY_EXIT_NORMAL_Y =
+    attitudeRecoveryConfig.exitNormalY == nil
+    and 0.25
+    or requireConfigType(
+            "safety.attitudeRecovery.exitNormalY",
+            attitudeRecoveryConfig.exitNormalY,
+            "number"
+        )
 local BALANCE_TIMEOUT = requireConfigType("balanceTimeout", config.balanceTimeout, "number")
 local GPS_TIMEOUT = requireConfigType("gpsTimeout", config.gpsTimeout, "number")
 
@@ -156,6 +222,21 @@ if CONTROLLER_BELOW_POWER_TOLERANCE < 0 or SAFETY_SHUTDOWN_DELAY < 0 then
 end
 if INVERTED_NORMAL_Y_THRESHOLD < -1 or INVERTED_NORMAL_Y_THRESHOLD >= 0 then
     fatalError("invalid safety.invertedNormalYThreshold: expected -1 <= value < 0")
+end
+if RECOVERY_REVERSE_SPEED >= 0
+    or RECOVERY_REVERSE_SPEED < MINIMUM_MOTOR_SPEED
+    or RECOVERY_REVERSE_SPEED > MAXIMUM_MOTOR_SPEED
+then
+    fatalError("invalid safety.attitudeRecovery.reverseSpeed: expected a supported negative speed")
+end
+if RECOVERY_LEVEL_KP < 0 or RECOVERY_LEVEL_KD < 0 or RECOVERY_MAX_CORRECTION < 0 then
+    fatalError("invalid safety.attitudeRecovery gains: values must be non-negative")
+end
+if RECOVERY_TIMEOUT <= 0 then
+    fatalError("invalid safety.attitudeRecovery.timeout: must be positive")
+end
+if RECOVERY_EXIT_NORMAL_Y <= 0 or RECOVERY_EXIT_NORMAL_Y > 1 then
+    fatalError("invalid safety.attitudeRecovery.exitNormalY: expected 0 < value <= 1")
 end
 if NAVIGATION_COMPLETION_DISTANCE < 0 then
     fatalError("invalid navigation.completionDistance: must be non-negative")
@@ -297,10 +378,16 @@ local previousHoverTime
 local hoverTargetYaw
 local previousYaw
 local currentYaw
+local currentRelativeNormalY
 local powerEnabled
 local safetyShutdown = false
 local unsafePositionSince
 local uprightNormalSign
+local attitudeRecoveryActive = false
+local attitudeRecoveryStartedAt
+local previousRecoveryPitchError
+local previousRecoveryRollError
+local previousRecoveryTime
 local powerControllerX
 local powerControllerY
 local powerControllerZ
@@ -353,6 +440,12 @@ local function sendMotorSpeed(side, speed)
     rednet.send(motorControllers[side], roundedSpeed, side)
 end
 
+local function sendSignedMotorSpeed(side, speed)
+    local roundedSpeed = round(clamp(speed, MINIMUM_MOTOR_SPEED, MAXIMUM_MOTOR_SPEED))
+    motorSpeed[side] = roundedSpeed
+    rednet.send(motorControllers[side], roundedSpeed, side)
+end
+
 local function stopAllMotors()
     for side, controllerId in pairs(motorControllers) do
         motorSpeed[side] = 0
@@ -375,12 +468,53 @@ local function resetHoverTarget()
     unsafePositionSince = nil
 end
 
+local function resetAttitudeRecovery()
+    attitudeRecoveryActive = false
+    attitudeRecoveryStartedAt = nil
+    previousRecoveryPitchError = nil
+    previousRecoveryRollError = nil
+    previousRecoveryTime = nil
+end
+
+local function applyAttitudeRecovery(now, pitchError, rollError)
+    local pitchRate = 0
+    local rollRate = 0
+    if previousRecoveryTime ~= nil and now > previousRecoveryTime then
+        local deltaTime = now - previousRecoveryTime
+        pitchRate = (pitchError - previousRecoveryPitchError) / deltaTime
+        rollRate = (rollError - previousRecoveryRollError) / deltaTime
+    end
+
+    local pitchCorrection = clamp(
+        RECOVERY_LEVEL_KP * pitchError
+            + RECOVERY_LEVEL_KD * pitchRate
+            + RECOVERY_PITCH_BIAS,
+        -RECOVERY_MAX_CORRECTION,
+        RECOVERY_MAX_CORRECTION
+    )
+    local rollCorrection = clamp(
+        RECOVERY_LEVEL_KP * rollError + RECOVERY_LEVEL_KD * rollRate,
+        -RECOVERY_MAX_CORRECTION,
+        RECOVERY_MAX_CORRECTION
+    )
+
+    sendSignedMotorSpeed("front", RECOVERY_REVERSE_SPEED + pitchCorrection)
+    sendSignedMotorSpeed("back", RECOVERY_REVERSE_SPEED - pitchCorrection)
+    sendSignedMotorSpeed("left", RECOVERY_REVERSE_SPEED + rollCorrection)
+    sendSignedMotorSpeed("right", RECOVERY_REVERSE_SPEED - rollCorrection)
+
+    previousRecoveryPitchError = pitchError
+    previousRecoveryRollError = rollError
+    previousRecoveryTime = now
+end
+
 local function waitForPowerResponse()
     local sender, state = rednet.receive("powerresp", POWER_RESPONSE_TIMEOUT)
     if sender == POWER_CONTROLLER_ID and type(state) == "boolean" then
         local wasEnabled = powerEnabled
         powerEnabled = state
         if not state then
+            resetAttitudeRecovery()
             stopAllMotors()
         elseif wasEnabled == false then
             -- 完整重启控制器，以重新加载配置、外设引用和所有控制参数。
@@ -448,6 +582,7 @@ local function emergencyPowerOff()
     end
 
     safetyShutdown = true
+    resetAttitudeRecovery()
     stopAllMotors()
     rednet.send(POWER_CONTROLLER_ID, false, "powerset")
     powerEnabled = false
@@ -563,6 +698,11 @@ local function drawPowerUi(message)
     else
         print(("Target heading: %.1f deg"):format(targetHeading))
     end
+    if currentRelativeNormalY == nil then
+        print("Upright factor: UNKNOWN")
+    else
+        print(("Upright factor: %.2f"):format(currentRelativeNormalY))
+    end
 
     local theoreticalHoverSpeed = getTheoreticalHoverSpeed()
     if theoreticalHoverSpeed == nil then
@@ -585,6 +725,12 @@ local function drawPowerUi(message)
         print("")
         print("SAFETY SHUTDOWN: inverted flight detected")
         print("Restore shape, then press Enter to restart")
+        term.setTextColor(previousColor)
+    elseif attitudeRecoveryActive then
+        local previousColor = term.getTextColor()
+        term.setTextColor(colors.orange)
+        print("")
+        print("ATTITUDE RECOVERY ACTIVE")
         term.setTextColor(previousColor)
     end
 
@@ -645,7 +791,11 @@ local function updateHover()
         controllerX = nil
         controllerY = nil
         controllerZ = nil
+        currentRelativeNormalY = nil
         unsafePositionSince = nil
+        if attitudeRecoveryActive then
+            emergencyPowerOff()
+        end
         return
     end
     controllerX = locatedX
@@ -655,6 +805,10 @@ local function updateHover()
     local propellerPositions = readPropellerPositions()
     if propellerPositions == nil then
         currentYaw = nil
+        currentRelativeNormalY = nil
+        if attitudeRecoveryActive then
+            emergencyPowerOff()
+        end
         return
     end
 
@@ -671,9 +825,13 @@ local function updateHover()
     local rightLength3d =
         math.sqrt(rightX * rightX + rightY * rightY + rightZ * rightZ)
 
-    if forwardLength == 0 or rightLength == 0 or forwardLength3d == 0 or rightLength3d == 0 then
+    if forwardLength3d == 0 or rightLength3d == 0 then
         currentYaw = nil
+        currentRelativeNormalY = nil
         unsafePositionSince = nil
+        if attitudeRecoveryActive then
+            emergencyPowerOff()
+        end
         return
     end
 
@@ -682,25 +840,49 @@ local function updateHover()
     if uprightNormalSign == nil and math.abs(normalY) >= 0.25 then
         uprightNormalSign = normalY >= 0 and 1 or -1
     end
-
-    forwardX = forwardX / forwardLength
-    forwardZ = forwardZ / forwardLength
-    rightX = rightX / rightLength
-    rightZ = rightZ / rightLength
-    currentYaw = math.atan2(forwardZ, forwardX)
+    local relativeNormalY = uprightNormalSign and normalY * uprightNormalSign or nil
+    currentRelativeNormalY = relativeNormalY
 
     if powerEnabled ~= true then
+        if forwardLength > 0 then
+            currentYaw = math.atan2(forwardZ, forwardX)
+        else
+            currentYaw = nil
+        end
         return
     end
 
     local now = os.epoch("utc") / 1000
+    local pitchError = propellerPositions.front.y - propellerPositions.back.y
+    local rollError = propellerPositions.left.y - propellerPositions.right.y
     local controllerClearlyBelowPower =
         powerControllerY ~= nil
         and controllerY + CONTROLLER_BELOW_POWER_TOLERANCE < powerControllerY
     local inverted =
-        uprightNormalSign ~= nil
-        and normalY * uprightNormalSign < INVERTED_NORMAL_Y_THRESHOLD
-    if controllerClearlyBelowPower and inverted then
+        relativeNormalY ~= nil
+        and relativeNormalY < INVERTED_NORMAL_Y_THRESHOLD
+
+    if ATTITUDE_RECOVERY_ENABLED and (attitudeRecoveryActive or inverted) then
+        if not attitudeRecoveryActive then
+            attitudeRecoveryActive = true
+            attitudeRecoveryStartedAt = now
+            previousRecoveryPitchError = nil
+            previousRecoveryRollError = nil
+            previousRecoveryTime = nil
+        end
+
+        if relativeNormalY ~= nil and relativeNormalY >= RECOVERY_EXIT_NORMAL_Y then
+            resetAttitudeRecovery()
+            resetHoverTarget()
+        elseif now - attitudeRecoveryStartedAt >= RECOVERY_TIMEOUT then
+            emergencyPowerOff()
+            return
+        else
+            unsafePositionSince = nil
+            applyAttitudeRecovery(now, pitchError, rollError)
+            return
+        end
+    elseif controllerClearlyBelowPower and inverted then
         unsafePositionSince = unsafePositionSince or now
         if now - unsafePositionSince >= SAFETY_SHUTDOWN_DELAY then
             emergencyPowerOff()
@@ -709,6 +891,17 @@ local function updateHover()
     else
         unsafePositionSince = nil
     end
+
+    if forwardLength == 0 or rightLength == 0 then
+        currentYaw = nil
+        return
+    end
+
+    forwardX = forwardX / forwardLength
+    forwardZ = forwardZ / forwardLength
+    rightX = rightX / rightLength
+    rightZ = rightZ / rightLength
+    currentYaw = math.atan2(forwardZ, forwardX)
 
     if hoverTargetY == nil then
         hoverTargetX = controllerX
@@ -723,9 +916,6 @@ local function updateHover()
     local pitchRate = 0
     local rollRate = 0
     local yawRate = 0
-
-    local pitchError = propellerPositions.front.y - propellerPositions.back.y
-    local rollError = propellerPositions.left.y - propellerPositions.right.y
 
     if deltaTime and deltaTime > 0 then
         velocityX = (controllerX - previousControllerX) / deltaTime

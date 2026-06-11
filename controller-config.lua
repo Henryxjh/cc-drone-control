@@ -47,6 +47,28 @@ return {
 
         -- 相对桨平面法向量的 Y 分量低于此值时，才视为已经翻转。
         invertedNormalYThreshold = -0.1,
+
+        -- 实验性姿态恢复。启用后，翻转时使用反向推力和差动推力尝试翻正。
+        attitudeRecovery = {
+            enabled = false,
+
+            -- 恢复期间四个动力源的反向基础速度。
+            reverseSpeed = -80,
+
+            -- 根据前后、左右高度差和变化速度生成恢复差动推力。
+            levelKp = 20,
+            levelKd = 5,
+            maxCorrection = 80,
+
+            -- 完全倒置时通过前后差动主动选择一个翻转方向，可使用负数反向。
+            pitchBias = 20,
+
+            -- 恢复超过此秒数仍未翻正时执行安全停机。
+            timeout = 2.5,
+
+            -- 相对桨平面法向量 Y 分量达到此值时，退出恢复并重新悬停。
+            exitNormalY = 0.25,
+        },
     },
 
     propulsion = {

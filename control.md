@@ -337,11 +337,22 @@ safety = {
     controllerBelowPowerTolerance = 0.75,
     shutdownDelay = 1.5,
     invertedNormalYThreshold = -0.1,
+
+    attitudeRecovery = {
+        enabled = false,
+        reverseSpeed = -80,
+        levelKp = 20,
+        levelKd = 5,
+        maxCorrection = 80,
+        pitchBias = 20,
+        timeout = 2.5,
+        exitNormalY = 0.25,
+    },
 }
 ```
 
-控制器启动后会根据四个螺旋桨坐标记录正常朝上的桨平面方向。仅当以下条件同时满足时，
-安全保护才会关闭电源和四个螺旋桨动力：
+控制器启动后会根据四个螺旋桨坐标记录正常朝上的桨平面方向。未启用实验性姿态恢复时，
+仅当以下条件同时满足，安全保护才会关闭电源和四个螺旋桨动力：
 
 1. 主控制器低于电源控制器超过 `controllerBelowPowerTolerance`
 2. 桨平面相对启动姿态已经翻转，法向量 Y 分量低于 `invertedNormalYThreshold`
@@ -353,6 +364,37 @@ safety = {
 - 长时间水平移动仍会误触发时，优先略微增大 `controllerBelowPowerTolerance`
 - 正常水平移动的机体仍然朝上，因此即使持续移动也不会触发安全停机
 - 开启控制器电源时，应确保机体处于正常朝上的形态
+
+### 实验性姿态恢复
+
+将 `attitudeRecovery.enabled` 设置为 `true` 后，检测到翻转时会暂停正常悬停、
+自动导航和手动移动，并使用负转速尝试翻正：
+
+- `reverseSpeed`：恢复期间四个动力源的反向基础速度，必须为负数
+- `levelKp`：根据前后、左右动力控制器高度差生成差动推力
+- `levelKd`：根据高度差变化速度抑制恢复过程中的旋转
+- `maxCorrection`：恢复差动推力的最大幅度
+- `pitchBias`：完全倒置时主动产生前后翻转力矩；改为负数可切换翻转方向
+- `timeout`：超过该时间仍未恢复时，关闭电源并将电机速度设为 `0`
+- `exitNormalY`：机体重新朝上达到该程度后退出恢复，并将当前位置设为悬停目标
+
+恢复阶段使用动力协议完整的 `-256..256` 范围，不受正常飞行 `0..256` 限制。
+UI 在恢复期间会显示 `ATTITUDE RECOVERY ACTIVE`。`Upright factor` 接近 `1` 表示正常
+朝上，接近 `0` 表示接近侧立，负数表示已经翻转。恢复期间丢失 GPS 或任一动力控制器
+坐标时会立即执行安全停机，避免持续保持最后一次反向动力输出。
+
+建议首次测试使用足够低的高度，并从较保守的参数开始：
+
+```lua
+reverseSpeed = -50
+maxCorrection = 40
+pitchBias = 10
+timeout = 1.0
+```
+
+如果完全倒置时不能开始翻转，逐步增大 `pitchBias` 和 `maxCorrection`。如果旋转过快或
+恢复后继续翻过头，降低这两个参数或增大 `levelKd`。反向推力方向错误会加速坠落，
+因此启用前必须确认四个动力源收到负速度时均产生与正速度相反的推力。
 
 恢复机体形态后必须按 Enter 手动重新开启电源；安全保护不会自动重新开机。
 
