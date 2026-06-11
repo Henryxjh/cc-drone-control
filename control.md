@@ -290,3 +290,13 @@ hover = {
 电源从关闭切换到开启后，主控制器会自动重启并重新加载 `controller-config.lua`。电源控制器保持开启；主控制器启动后会使用新的 GPS 坐标和航向作为悬停目标。
 
 当主控制器的 Y 坐标低于电源控制器的 Y 坐标时，安全保护会关闭电源和四个螺旋桨动力。恢复机体形态后必须按 Enter 手动重新开启电源；安全保护不会自动重新开机。
+
+## 计算每格动力增长率
+
+使用 `calculate_thrust_rate.py`，传入至少两个实测的 `高度,悬停动力` 数据点：
+
+```bash
+python3 calculate_thrust_rate.py --reference-y=-50 -- -50,137 0,145.5 50,154
+```
+
+`--` 用于分隔选项与负高度测量点。脚本会执行线性拟合并输出可直接填入配置文件的 `baseThrust`、`baseThrustReferenceY` 和 `thrustPerYLevel`。
