@@ -257,7 +257,12 @@ local navigationWasActive = false
 local navigationResetPending = false
 local navigationCompleted = false
 local completedNavigationTargetX
+local completedNavigationTargetY
 local completedNavigationTargetZ
+local completedNavigationSource
+local currentNavigationSource
+local customNavigationTargetX
+local customNavigationTargetZ
 local manualNavigationPauseUntil = 0
 
 local function moveBackward()
@@ -550,12 +555,19 @@ local function drawPowerUi(message)
     if currentTargetX == nil or currentTargetZ == nil then
         print("Navigation target: NONE")
     elseif navigationCompleted then
-        print(("Navigation target: %.2f %.2f COMPLETE"):format(
+        print(("Navigation target: %.2f %.2f %.2f COMPLETE (%s)"):format(
             currentTargetX,
-            currentTargetZ
+            currentTargetY or hoverTargetY or 0,
+            currentTargetZ,
+            currentNavigationSource or "UNKNOWN"
         ))
     else
-        print(("Navigation target: %.2f %.2f"):format(currentTargetX, currentTargetZ))
+        print(("Navigation target: %.2f %.2f %.2f (%s)"):format(
+            currentTargetX,
+            currentTargetY or hoverTargetY or 0,
+            currentTargetZ,
+            currentNavigationSource or "UNKNOWN"
+        ))
     end
 
     local currentHeading = yawToHeading(currentYaw)
@@ -644,6 +656,15 @@ local function readPropellerPositions()
     end
 
     return positions
+end
+
+local function applyCurrentNavigationTarget()
+    if currentTargetX == nil or currentTargetZ == nil or navigationCompleted then
+        return
+    end
+
+    hoverTargetX = currentTargetX
+    hoverTargetZ = currentTargetZ
 end
 
 local function updateHover()
@@ -762,13 +783,8 @@ local function updateHover()
     -- 自动导航仅控制水平位置；任意手动操作会暂停本周期的自动导航。
     local manualNavigationPaused =
         manualControlActive or os.epoch("utc") < manualNavigationPauseUntil
-    if currentTargetX ~= nil
-        and currentTargetZ ~= nil
-        and not navigationCompleted
-        and not manualNavigationPaused
-    then
-        hoverTargetX = currentTargetX
-        hoverTargetZ = currentTargetZ
+    if not manualNavigationPaused then
+        applyCurrentNavigationTarget()
     end
 
     local yaw = currentYaw
@@ -846,10 +862,27 @@ local function updateHover()
 end
 
 local function updateCurrentTarget()
-    local navigationData = blockReader.getBlockData()
-    local currentStack = navigationData and navigationData.CurrentStack
+    local x
+    local y
+    local z
+    local source
+    if customNavigationTargetX ~= nil and customNavigationTargetZ ~= nil then
+        x = customNavigationTargetX
+        z = customNavigationTargetZ
+        source = "CUSTOM"
+    else
+        local navigationData = blockReader.getBlockData()
+        local currentStack = navigationData and navigationData.CurrentStack
+        if type(currentStack) == "table" and next(currentStack) ~= nil then
+            local target = navigationData.CurrentTarget
+            x = target and (target.x or target.X or target[1])
+            y = target and (target.y or target.Y or target[2])
+            z = target and (target.z or target.Z or target[3])
+            source = "TABLE"
+        end
+    end
 
-    if type(currentStack) ~= "table" or next(currentStack) == nil then
+    if type(x) ~= "number" or type(z) ~= "number" then
         if navigationWasActive then
             navigationResetPending = true
         end
@@ -861,41 +894,36 @@ local function updateCurrentTarget()
         currentTargetX = nil
         currentTargetY = nil
         currentTargetZ = nil
+        currentNavigationSource = nil
         navigationWasActive = false
         navigationCompleted = false
         completedNavigationTargetX = nil
+        completedNavigationTargetY = nil
         completedNavigationTargetZ = nil
-        return
-    end
-
-    local target = navigationData.CurrentTarget
-    local x = target and (target.x or target.X or target[1])
-    local y = target and (target.y or target.Y or target[2])
-    local z = target and (target.z or target.Z or target[3])
-
-    if type(x) ~= "number" or type(z) ~= "number" then
-        currentTargetX = nil
-        currentTargetY = nil
-        currentTargetZ = nil
-        navigationWasActive = false
-        navigationCompleted = false
-        completedNavigationTargetX = nil
-        completedNavigationTargetZ = nil
+        completedNavigationSource = nil
         return
     end
 
     local targetChanged =
         completedNavigationTargetX ~= nil
-        and (x ~= completedNavigationTargetX or z ~= completedNavigationTargetZ)
+        and (
+            x ~= completedNavigationTargetX
+            or y ~= completedNavigationTargetY
+            or z ~= completedNavigationTargetZ
+            or source ~= completedNavigationSource
+        )
     if targetChanged then
         navigationCompleted = false
         completedNavigationTargetX = nil
+        completedNavigationTargetY = nil
         completedNavigationTargetZ = nil
+        completedNavigationSource = nil
     end
 
     currentTargetX = x
     currentTargetY = y
     currentTargetZ = z
+    currentNavigationSource = source
     navigationResetPending = false
 
     if not navigationCompleted and controllerX ~= nil and controllerZ ~= nil then
@@ -906,13 +934,43 @@ local function updateCurrentTarget()
         if distanceX * distanceX + distanceZ * distanceZ <= completionDistanceSquared then
             navigationCompleted = true
             completedNavigationTargetX = x
+            completedNavigationTargetY = y
             completedNavigationTargetZ = z
+            completedNavigationSource = source
             hoverTargetX = controllerX
             hoverTargetZ = controllerZ
         end
     end
 
     navigationWasActive = not navigationCompleted
+end
+
+local function customNavigationLoop()
+    rednet.send(POWER_CONTROLLER_ID, true, "customnavget")
+
+    while true do
+        local sender, message = rednet.receive("customnav")
+        if sender == POWER_CONTROLLER_ID then
+            local accepted = false
+            if message == false or message == "clear" then
+                customNavigationTargetX = nil
+                customNavigationTargetZ = nil
+                navigationCompleted = false
+                accepted = true
+            elseif type(message) == "table"
+                and type(message[1]) == "number"
+                and type(message[2]) == "number"
+            then
+                customNavigationTargetX = message[1]
+                -- 兼容旧版 {x, y, z} 消息；新协议使用 {x, z}。
+                customNavigationTargetZ =
+                    type(message[3]) == "number" and message[3] or message[2]
+                navigationCompleted = false
+                accepted = true
+            end
+            rednet.send(POWER_CONTROLLER_ID, accepted, "customnavresp")
+        end
+    end
 end
 
 local function controlLoop()
@@ -1042,4 +1100,4 @@ local function powerUiLoop()
     end
 end
 
-parallel.waitForAll(controlLoop, powerUiLoop)
+parallel.waitForAll(controlLoop, powerUiLoop, customNavigationLoop)
