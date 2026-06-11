@@ -707,10 +707,6 @@ local function controlLoop()
             and forward
             and left
             and right
-            and rotateLeftInput
-            and rotateRightInput
-            and up
-            and down
 
         logRedstoneInputs({
             backward = backward,
