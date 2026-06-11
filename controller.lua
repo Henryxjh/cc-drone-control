@@ -246,6 +246,7 @@ local previousRollError
 local previousHoverTime
 local hoverTargetYaw
 local previousYaw
+local currentYaw
 local powerEnabled
 local safetyShutdown = false
 local powerControllerX
@@ -273,6 +274,18 @@ local function normalizeAngle(angle)
         angle = angle + 2 * math.pi
     end
     return angle
+end
+
+local function yawToHeading(yaw)
+    if yaw == nil then
+        return nil
+    end
+
+    local heading = -math.deg(yaw) % 360
+    if heading < 0 then
+        heading = heading + 360
+    end
+    return heading
 end
 
 local function round(value)
@@ -458,6 +471,19 @@ local function drawPowerUi(message)
         ))
     end
 
+    local currentHeading = yawToHeading(currentYaw)
+    local targetHeading = yawToHeading(hoverTargetYaw)
+    if currentHeading == nil then
+        print("Heading: UNKNOWN")
+    else
+        print(("Heading: %.1f deg"):format(currentHeading))
+    end
+    if targetHeading == nil then
+        print("Target heading: UNKNOWN")
+    else
+        print(("Target heading: %.1f deg"):format(targetHeading))
+    end
+
     local theoreticalHoverSpeed = getTheoreticalHoverSpeed()
     if theoreticalHoverSpeed == nil then
         print("Theoretical hover speed: UNKNOWN")
@@ -545,17 +571,36 @@ local function updateHover()
     controllerY = locatedY
     controllerZ = locatedZ
 
+    local propellerPositions = readPropellerPositions()
+    if propellerPositions == nil then
+        currentYaw = nil
+        return
+    end
+
+    local forwardX = propellerPositions.front.x - propellerPositions.back.x
+    local forwardZ = propellerPositions.front.z - propellerPositions.back.z
+    local forwardLength = math.sqrt(forwardX * forwardX + forwardZ * forwardZ)
+    local rightX = propellerPositions.right.x - propellerPositions.left.x
+    local rightZ = propellerPositions.right.z - propellerPositions.left.z
+    local rightLength = math.sqrt(rightX * rightX + rightZ * rightZ)
+
+    if forwardLength == 0 or rightLength == 0 then
+        currentYaw = nil
+        return
+    end
+
+    forwardX = forwardX / forwardLength
+    forwardZ = forwardZ / forwardLength
+    rightX = rightX / rightLength
+    rightZ = rightZ / rightLength
+    currentYaw = math.atan2(forwardZ, forwardX)
+
     if powerEnabled ~= true then
         return
     end
 
     if powerControllerY ~= nil and controllerY < powerControllerY then
         emergencyPowerOff()
-        return
-    end
-
-    local propellerPositions = readPropellerPositions()
-    if propellerPositions == nil then
         return
     end
 
@@ -585,22 +630,6 @@ local function updateHover()
         rollRate = (rollError - previousRollError) / deltaTime
     end
 
-    local forwardX = propellerPositions.front.x - propellerPositions.back.x
-    local forwardZ = propellerPositions.front.z - propellerPositions.back.z
-    local forwardLength = math.sqrt(forwardX * forwardX + forwardZ * forwardZ)
-    local rightX = propellerPositions.right.x - propellerPositions.left.x
-    local rightZ = propellerPositions.right.z - propellerPositions.left.z
-    local rightLength = math.sqrt(rightX * rightX + rightZ * rightZ)
-
-    if forwardLength == 0 or rightLength == 0 then
-        return
-    end
-
-    forwardX = forwardX / forwardLength
-    forwardZ = forwardZ / forwardLength
-    rightX = rightX / rightLength
-    rightZ = rightZ / rightLength
-
     local movementDeltaTime = clamp(deltaTime or 0, 0, 0.5)
     local forwardDistance = forwardCommand * HORIZONTAL_MOVE_SPEED * movementDeltaTime
     local rightDistance = rightCommand * HORIZONTAL_MOVE_SPEED * movementDeltaTime
@@ -615,7 +644,7 @@ local function updateHover()
     end
     hoverTargetZ = hoverTargetZ + forwardZ * forwardDistance + rightZ * rightDistance
 
-    local yaw = math.atan2(forwardZ, forwardX)
+    local yaw = currentYaw
     if hoverTargetYaw == nil or yawCommand ~= 0 then
         hoverTargetYaw = yaw
     end
