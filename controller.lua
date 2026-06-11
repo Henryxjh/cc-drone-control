@@ -331,6 +331,30 @@ local function togglePower()
     return waitForPowerResponse()
 end
 
+local function adjustHoverTarget(key)
+    if hoverTargetX == nil or hoverTargetY == nil or hoverTargetZ == nil then
+        return false
+    end
+
+    if key == keys.w then
+        hoverTargetX = hoverTargetX + 1
+    elseif key == keys.s then
+        hoverTargetX = hoverTargetX - 1
+    elseif key == keys.a then
+        hoverTargetZ = hoverTargetZ - 1
+    elseif key == keys.d then
+        hoverTargetZ = hoverTargetZ + 1
+    elseif key == keys.space then
+        hoverTargetY = hoverTargetY + 1
+    elseif key == keys.leftShift or key == keys.rightShift then
+        hoverTargetY = math.max(BASE_THRUST_REFERENCE_Y, hoverTargetY - 1)
+    else
+        return false
+    end
+
+    return true
+end
+
 local function emergencyPowerOff()
     if safetyShutdown then
         return
@@ -783,6 +807,8 @@ local function powerUiLoop()
                 drawPowerUi("Power controller did not respond")
             end
             refreshTimer = os.startTimer(UI_REFRESH_INTERVAL)
+        elseif event == "key" and adjustHoverTarget(value) then
+            drawPowerUi()
         elseif event == "timer" and value == refreshTimer then
             if safetyShutdown then
                 stopAllMotors()
