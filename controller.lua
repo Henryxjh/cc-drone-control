@@ -255,7 +255,6 @@ local motorSpeed = {
     front = 0,
     back = 0,
 }
-local actualMotorSpeed = {}
 
 local function clamp(value, minimum, maximum)
     return math.max(minimum, math.min(maximum, value))
@@ -374,46 +373,16 @@ local function requestPowerPosition()
     return true
 end
 
-local function requestMotorSpeeds()
-    local sideByControllerId = {}
-    local remaining = 0
-
-    for side, controllerId in pairs(motorControllers) do
-        sideByControllerId[controllerId] = side
-        rednet.send(controllerId, true, "speed")
-        remaining = remaining + 1
+local function getTheoreticalHoverSpeed()
+    if hoverTargetY == nil then
+        return nil
     end
 
-    local timer = os.startTimer(BALANCE_TIMEOUT)
-    while remaining > 0 do
-        local event, first, second, third = os.pullEvent()
-
-        if event == "timer" and first == timer then
-            break
-        end
-
-        if event == "rednet_message" and third == "speedresp" then
-            local side = sideByControllerId[first]
-            if side
-                and actualMotorSpeed[side] == nil
-                and type(second) == "number"
-                and second >= MINIMUM_MOTOR_SPEED
-                and second <= MAXIMUM_MOTOR_SPEED
-            then
-                actualMotorSpeed[side] = second
-                remaining = remaining - 1
-            end
-        end
-    end
-
-    return remaining == 0
-end
-
-local function formatMotorSpeed(speed)
-    if type(speed) ~= "number" then
-        return "?"
-    end
-    return tostring(speed)
+    return round(clamp(
+        BASE_THRUST + (hoverTargetY - BASE_THRUST_REFERENCE_Y) * THRUST_PER_Y_LEVEL,
+        MINIMUM_FLIGHT_SPEED,
+        MAXIMUM_FLIGHT_SPEED
+    ))
 end
 
 local function drawPowerUi(message)
@@ -460,17 +429,16 @@ local function drawPowerUi(message)
         ))
     end
 
+    local theoreticalHoverSpeed = getTheoreticalHoverSpeed()
+    if theoreticalHoverSpeed == nil then
+        print("Theoretical hover speed: UNKNOWN")
+    else
+        print(("Theoretical hover speed: %d"):format(theoreticalHoverSpeed))
+    end
+
     print("")
     print(("Cmd F:%d B:%d"):format(motorSpeed.front, motorSpeed.back))
     print(("Cmd L:%d R:%d"):format(motorSpeed.left, motorSpeed.right))
-    print(("Real F:%s B:%s"):format(
-        formatMotorSpeed(actualMotorSpeed.front),
-        formatMotorSpeed(actualMotorSpeed.back)
-    ))
-    print(("Real L:%s R:%s"):format(
-        formatMotorSpeed(actualMotorSpeed.left),
-        formatMotorSpeed(actualMotorSpeed.right)
-    ))
     print(("Motor range: %d to %d"):format(MINIMUM_MOTOR_SPEED, MAXIMUM_MOTOR_SPEED))
 
     print("")
@@ -823,8 +791,6 @@ local function powerUiLoop()
             end
             requestPowerStatus()
             local positionUpdated = requestPowerPosition()
-            actualMotorSpeed = {}
-            requestMotorSpeeds()
             drawPowerUi(positionUpdated and nil or "Power position unavailable")
             refreshTimer = os.startTimer(UI_REFRESH_INTERVAL)
         end

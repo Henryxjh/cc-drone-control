@@ -45,8 +45,6 @@ local reverse = false
 控制器 UI 中：
 
 - `Cmd` 表示主控制器下发的目标速度
-- `Real` 表示动力控制器通过 `electric_motor.getSpeed()` 返回的实际速度
-- `Real` 为 `?` 表示对应动力控制器未在超时前响应
 
 ## 红石输入调试日志
 
