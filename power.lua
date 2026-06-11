@@ -74,7 +74,7 @@ local function networkLoop()
             os.queueEvent("power_ui_refresh")
         elseif sender == controller and protocol == "customnavget" then
             if targetX == nil then
-                rednet.send(controller, false, "customnav")
+                rednet.send(controller, "none", "customnav")
             else
                 rednet.send(controller, {targetX, targetZ}, "customnav")
             end
@@ -126,7 +126,7 @@ local function uiLoop()
             targetX = nil
             targetZ = nil
             statusMessage = "Clearing custom target..."
-            rednet.send(controller, false, "customnav")
+            rednet.send(controller, "clear", "customnav")
             drawUi()
         elseif event == "power_ui_refresh" then
             drawUi()

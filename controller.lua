@@ -263,6 +263,8 @@ local completedNavigationSource
 local currentNavigationSource
 local customNavigationTargetX
 local customNavigationTargetZ
+local navigationTableSuppressed = false
+local navigationTableClearedAfterSuppression = false
 local manualNavigationPauseUntil = 0
 
 local function moveBackward()
@@ -873,13 +875,32 @@ local function updateCurrentTarget()
     else
         local navigationData = blockReader.getBlockData()
         local currentStack = navigationData and navigationData.CurrentStack
-        if type(currentStack) == "table" and next(currentStack) ~= nil then
+        local navigationTableHasData =
+            type(currentStack) == "table" and next(currentStack) ~= nil
+
+        if navigationTableSuppressed then
+            if not navigationTableHasData then
+                navigationTableClearedAfterSuppression = true
+            elseif navigationTableClearedAfterSuppression then
+                navigationTableSuppressed = false
+                navigationTableClearedAfterSuppression = false
+            end
+        end
+
+        if navigationTableHasData then
             local target = navigationData.CurrentTarget
             x = target and (target.x or target.X or target[1])
             y = target and (target.y or target.Y or target[2])
             z = target and (target.z or target.Z or target[3])
             source = "TABLE"
         end
+    end
+
+    if source == "TABLE" and navigationTableSuppressed then
+        x = nil
+        y = nil
+        z = nil
+        source = nil
     end
 
     if type(x) ~= "number" or type(z) ~= "number" then
@@ -947,6 +968,8 @@ local function updateCurrentTarget()
                 completedNavigationTargetY = nil
                 completedNavigationTargetZ = nil
                 completedNavigationSource = nil
+                navigationTableSuppressed = true
+                navigationTableClearedAfterSuppression = false
                 rednet.send(POWER_CONTROLLER_ID, true, "customnavclear")
                 return
             end
@@ -969,7 +992,14 @@ local function customNavigationLoop()
         local sender, message = rednet.receive("customnav")
         if sender == POWER_CONTROLLER_ID then
             local accepted = false
-            if message == false or message == "clear" then
+            if message == "clear" then
+                customNavigationTargetX = nil
+                customNavigationTargetZ = nil
+                navigationCompleted = false
+                navigationTableSuppressed = true
+                navigationTableClearedAfterSuppression = false
+                accepted = true
+            elseif message == false or message == "none" then
                 customNavigationTargetX = nil
                 customNavigationTargetZ = nil
                 navigationCompleted = false
@@ -1110,8 +1140,8 @@ local function powerUiLoop()
                 requestPowerStatus()
             end
             requestPowerStatus()
-            local positionUpdated = requestPowerPosition()
-            drawPowerUi(positionUpdated and nil or "Power position unavailable")
+            requestPowerPosition()
+            drawPowerUi()
             refreshTimer = os.startTimer(UI_REFRESH_INTERVAL)
         end
     end
