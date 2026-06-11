@@ -510,7 +510,7 @@ local function drawPowerUi(message)
         print("Power: OFF")
     end
 
-    if powerControllerX == nil then
+    if powerControllerX == nil or powerControllerY == nil or powerControllerZ == nil then
         print("Power position: UNKNOWN")
     else
         print(("Power position: %.2f %.2f %.2f"):format(
@@ -520,7 +520,7 @@ local function drawPowerUi(message)
         ))
     end
 
-    if controllerX == nil then
+    if controllerX == nil or controllerY == nil or controllerZ == nil then
         print("Controller position: UNKNOWN")
     else
         print(("Controller position: %.2f %.2f %.2f"):format(
@@ -530,7 +530,7 @@ local function drawPowerUi(message)
         ))
     end
 
-    if hoverTargetX == nil then
+    if hoverTargetX == nil or hoverTargetY == nil or hoverTargetZ == nil then
         print("Hover target: UNKNOWN")
     else
         print(("Hover target: %.2f %.2f %.2f"):format(
