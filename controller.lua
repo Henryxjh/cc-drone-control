@@ -196,6 +196,7 @@ local yawCommand = 0
 local forwardCommand = 0
 local rightCommand = 0
 local verticalCommand = 0
+local allSignalsToggleLatched = false
 
 local function moveBackward()
     forwardCommand = -1
@@ -242,6 +243,7 @@ local hoverTargetYaw
 local previousYaw
 local powerEnabled
 local safetyShutdown = false
+local manualPowerToggleRequested = false
 local powerControllerX
 local powerControllerY
 local powerControllerZ
@@ -310,7 +312,11 @@ local function waitForPowerResponse()
             stopAllMotors()
         elseif wasEnabled == false then
             resetHoverTarget()
+            if manualPowerToggleRequested then
+                safetyShutdown = false
+            end
         end
+        manualPowerToggleRequested = false
         return true
     end
 
@@ -323,10 +329,11 @@ local function requestPowerStatus()
 end
 
 local function togglePower()
+    manualPowerToggleRequested = true
     rednet.send(POWER_CONTROLLER_ID, true, "power")
     local responseReceived = waitForPowerResponse()
-    if responseReceived and powerEnabled then
-        safetyShutdown = false
+    if not responseReceived then
+        manualPowerToggleRequested = false
     end
     return responseReceived
 end
@@ -695,6 +702,15 @@ local function controlLoop()
         local right = redstoneRelayRight.getInput("right")
         local rotateRightInput = redstoneRelayRight.getInput("top")
         local down = redstoneRelayRight.getInput("bottom")
+        local allSignalsActive =
+            backward
+            and forward
+            and left
+            and right
+            and rotateLeftInput
+            and rotateRightInput
+            and up
+            and down
 
         logRedstoneInputs({
             backward = backward,
@@ -706,6 +722,14 @@ local function controlLoop()
             up = up,
             down = down,
         })
+
+        if allSignalsActive and not allSignalsToggleLatched then
+            allSignalsToggleLatched = true
+            manualPowerToggleRequested = true
+            rednet.send(POWER_CONTROLLER_ID, true, "power")
+        elseif not allSignalsActive then
+            allSignalsToggleLatched = false
+        end
 
         yawCommand = 0
         forwardCommand = 0
@@ -779,6 +803,7 @@ local function powerUiLoop()
                 rednet.send(POWER_CONTROLLER_ID, false, "powerset")
                 requestPowerStatus()
             end
+            requestPowerStatus()
             local positionUpdated = requestPowerPosition()
             actualMotorSpeed = {}
             requestMotorSpeeds()
