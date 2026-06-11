@@ -96,6 +96,10 @@ end
 local BASE_THRUST = requireConfigType("hover.baseThrust", hoverConfig.baseThrust, "number")
 local BASE_THRUST_REFERENCE_Y =
     requireConfigType("hover.baseThrustReferenceY", hoverConfig.baseThrustReferenceY, "number")
+local MAXIMUM_HOVER_Y =
+    hoverConfig.maximumHoverY == nil
+    and 320
+    or requireConfigType("hover.maximumHoverY", hoverConfig.maximumHoverY, "number")
 local THRUST_PER_Y_LEVEL =
     requireConfigType("hover.thrustPerYLevel", hoverConfig.thrustPerYLevel, "number")
 local ALTITUDE_KP = requireConfigType("hover.altitudeKp", hoverConfig.altitudeKp, "number")
@@ -147,6 +151,9 @@ local GPS_TIMEOUT = requireConfigType("gpsTimeout", config.gpsTimeout, "number")
 
 if BASE_THRUST < MINIMUM_FLIGHT_SPEED or BASE_THRUST > MAXIMUM_FLIGHT_SPEED then
     fatalError("invalid hover.baseThrust: outside normal flight speed range")
+end
+if MAXIMUM_HOVER_Y < BASE_THRUST_REFERENCE_Y then
+    fatalError("invalid hover.maximumHoverY: must not be below hover.baseThrustReferenceY")
 end
 if MAXIMUM_CLIMB_RATE < 0 or MAXIMUM_DESCENT_RATE < 0 then
     fatalError("invalid vertical rate: maximum climb/descent rates must be non-negative")
@@ -431,7 +438,7 @@ local function adjustHoverTarget(key)
     elseif key == keys.d then
         hoverTargetZ = hoverTargetZ + 1
     elseif key == keys.space then
-        hoverTargetY = hoverTargetY + 1
+        hoverTargetY = math.min(MAXIMUM_HOVER_Y, hoverTargetY + 1)
     elseif key == keys.leftShift or key == keys.rightShift then
         hoverTargetY = math.max(BASE_THRUST_REFERENCE_Y, hoverTargetY - 1)
     else
@@ -712,7 +719,7 @@ local function updateHover()
 
     if hoverTargetY == nil then
         hoverTargetX = controllerX
-        hoverTargetY = math.max(controllerY, BASE_THRUST_REFERENCE_Y)
+        hoverTargetY = clamp(controllerY, BASE_THRUST_REFERENCE_Y, MAXIMUM_HOVER_Y)
         hoverTargetZ = controllerZ
     end
 
@@ -740,7 +747,10 @@ local function updateHover()
     local rightDistance = rightCommand * HORIZONTAL_MOVE_SPEED * movementDeltaTime
     hoverTargetX = hoverTargetX + forwardX * forwardDistance + rightX * rightDistance
     if verticalCommand > 0 then
-        hoverTargetY = hoverTargetY + MAXIMUM_CLIMB_RATE * movementDeltaTime
+        hoverTargetY = math.min(
+            MAXIMUM_HOVER_Y,
+            hoverTargetY + MAXIMUM_CLIMB_RATE * movementDeltaTime
+        )
     elseif verticalCommand < 0 then
         hoverTargetY = math.max(
             BASE_THRUST_REFERENCE_Y,

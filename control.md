@@ -110,7 +110,8 @@ navigation = {
 - `Q`：悬停目标航向左旋 `1°`
 - `E`：悬停目标航向右旋 `1°`
 
-下降操作不会使目标高度低于 `baseThrustReferenceY`。尚未建立对应悬停目标位置或目标航向时，相关微调按键不会生效。
+下降操作不会使目标高度低于 `baseThrustReferenceY`，上升操作不会使目标高度超过
+`maximumHoverY`。尚未建立对应悬停目标位置或目标航向时，相关微调按键不会生效。
 
 ## 推荐调参顺序
 
@@ -126,6 +127,7 @@ navigation = {
 ```lua
 baseThrust = 137
 baseThrustReferenceY = -50
+maximumHoverY = 320
 thrustPerYLevel = 0.17
 ```
 
@@ -138,6 +140,7 @@ baseThrust + (targetY - baseThrustReferenceY) * thrustPerYLevel
 - `baseThrust`：参考高度时的基础悬停速度
 - `baseThrustReferenceY`：`baseThrust` 对应的 Y 坐标，当前为 `-50`
 - `baseThrustReferenceY` 同时也是最低悬停目标高度；下降操作不会将目标高度降到该值以下
+- `maximumHoverY`：允许设置的最大悬停目标世界 Y 坐标
 - 持续下降：增大 `baseThrust`
 - 持续上升：减小 `baseThrust`
 - 仅在高处持续下降：增大 `thrustPerYLevel`
@@ -289,6 +292,7 @@ uiRefreshInterval = 0.5
 hover = {
     baseThrust = 137,
     baseThrustReferenceY = -50,
+    maximumHoverY = 320,
     thrustPerYLevel = 0.17,
 
     altitudeKp = 17.0,

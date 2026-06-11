@@ -66,6 +66,9 @@ return {
         -- baseThrust 对应的 Y 坐标。
         baseThrustReferenceY = -50,
 
+        -- 允许设置的最大悬停目标世界 Y 坐标。
+        maximumHoverY = 320,
+
         -- 目标 Y 坐标每增加一格，需要增加的基础悬停推力。
         thrustPerYLevel = 0.17,
 
