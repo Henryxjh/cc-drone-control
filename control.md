@@ -104,6 +104,7 @@ baseThrust + (targetY - baseThrustReferenceY) * thrustPerYLevel
 
 - `baseThrust`：参考高度时的基础悬停速度
 - `baseThrustReferenceY`：`baseThrust` 对应的 Y 坐标，当前为 `-50`
+- `baseThrustReferenceY` 同时也是最低悬停目标高度；下降操作不会将目标高度降到该值以下
 - 持续下降：增大 `baseThrust`
 - 持续上升：减小 `baseThrust`
 - 仅在高处持续下降：增大 `thrustPerYLevel`

@@ -246,6 +246,9 @@ local safetyShutdown = false
 local powerControllerX
 local powerControllerY
 local powerControllerZ
+local controllerX
+local controllerY
+local controllerZ
 local motorSpeed = {
     left = 0,
     right = 0,
@@ -437,6 +440,26 @@ local function drawPowerUi(message)
         ))
     end
 
+    if controllerX == nil then
+        print("Controller position: UNKNOWN")
+    else
+        print(("Controller position: %.2f %.2f %.2f"):format(
+            controllerX,
+            controllerY,
+            controllerZ
+        ))
+    end
+
+    if hoverTargetX == nil then
+        print("Hover target: UNKNOWN")
+    else
+        print(("Hover target: %.2f %.2f %.2f"):format(
+            hoverTargetX,
+            hoverTargetY,
+            hoverTargetZ
+        ))
+    end
+
     print("")
     print(("Cmd F:%d B:%d"):format(motorSpeed.front, motorSpeed.back))
     print(("Cmd L:%d R:%d"):format(motorSpeed.left, motorSpeed.right))
@@ -514,12 +537,18 @@ local function readPropellerPositions()
 end
 
 local function updateHover()
-    if powerEnabled ~= true then
+    local locatedX, locatedY, locatedZ = gps.locate(GPS_TIMEOUT, false)
+    if locatedX == nil or locatedY == nil or locatedZ == nil then
+        controllerX = nil
+        controllerY = nil
+        controllerZ = nil
         return
     end
+    controllerX = locatedX
+    controllerY = locatedY
+    controllerZ = locatedZ
 
-    local controllerX, controllerY, controllerZ = gps.locate(GPS_TIMEOUT, false)
-    if controllerX == nil or controllerY == nil or controllerZ == nil then
+    if powerEnabled ~= true then
         return
     end
 
@@ -536,7 +565,7 @@ local function updateHover()
     local now = os.epoch("utc") / 1000
     if hoverTargetY == nil then
         hoverTargetX = controllerX
-        hoverTargetY = controllerY
+        hoverTargetY = math.max(controllerY, BASE_THRUST_REFERENCE_Y)
         hoverTargetZ = controllerZ
     end
 
@@ -579,7 +608,10 @@ local function updateHover()
     local forwardDistance = forwardCommand * HORIZONTAL_MOVE_SPEED * movementDeltaTime
     local rightDistance = rightCommand * HORIZONTAL_MOVE_SPEED * movementDeltaTime
     hoverTargetX = hoverTargetX + forwardX * forwardDistance + rightX * rightDistance
-    hoverTargetY = hoverTargetY + verticalCommand * VERTICAL_MOVE_SPEED * movementDeltaTime
+    hoverTargetY = math.max(
+        BASE_THRUST_REFERENCE_Y,
+        hoverTargetY + verticalCommand * VERTICAL_MOVE_SPEED * movementDeltaTime
+    )
     hoverTargetZ = hoverTargetZ + forwardZ * forwardDistance + rightZ * rightDistance
 
     local yaw = math.atan2(forwardZ, forwardX)
