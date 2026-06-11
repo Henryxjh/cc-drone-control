@@ -1,0 +1,640 @@
+local function fatalError(message)
+    local previousColor = term.getTextColor()
+    term.clear()
+    term.setCursorPos(1, 1)
+    term.setTextColor(colors.red)
+    print(message)
+    term.setTextColor(previousColor)
+    os.sleep(1)
+    os.reboot()
+end
+
+local programPath = shell.getRunningProgram()
+local configPath = fs.combine(fs.getDir(programPath), "controller-config.lua")
+
+if not fs.exists(configPath) then
+    fatalError("missing controller config: " .. configPath)
+end
+
+local configLoaded, config = pcall(dofile, configPath)
+if not configLoaded then
+    fatalError("failed to load controller config: " .. tostring(config))
+end
+
+local function requireConfigType(path, value, expectedType)
+    if type(value) ~= expectedType then
+        fatalError(("invalid config '%s': expected %s"):format(path, expectedType))
+    end
+    return value
+end
+
+requireConfigType("config", config, "table")
+local peripherals = requireConfigType("peripherals", config.peripherals, "table")
+local hoverConfig = requireConfigType("hover", config.hover, "table")
+local propellerControllers =
+    requireConfigType("propellerControllers", config.propellerControllers, "table")
+
+local BLOCK_READER_SIDE =
+    requireConfigType("peripherals.blockReader", peripherals.blockReader, "string")
+local TELEPORTER_SIDE =
+    requireConfigType("peripherals.teleporter", peripherals.teleporter, "string")
+local REDSTONE_RELAY_LEFT_SIDE =
+    requireConfigType("peripherals.redstoneRelayLeft", peripherals.redstoneRelayLeft, "string")
+local REDSTONE_RELAY_RIGHT_SIDE =
+    requireConfigType("peripherals.redstoneRelayRight", peripherals.redstoneRelayRight, "string")
+local NAVIGATION_TABLE_BLOCK =
+    requireConfigType("navigationTableBlock", config.navigationTableBlock, "string")
+
+requireConfigType("propellerControllers.left", propellerControllers.left, "number")
+requireConfigType("propellerControllers.right", propellerControllers.right, "number")
+requireConfigType("propellerControllers.front", propellerControllers.front, "number")
+requireConfigType("propellerControllers.back", propellerControllers.back, "number")
+
+local POWER_CONTROLLER_ID =
+    requireConfigType("powerControllerId", config.powerControllerId, "number")
+local POWER_RESPONSE_TIMEOUT =
+    requireConfigType("powerResponseTimeout", config.powerResponseTimeout, "number")
+local UI_REFRESH_INTERVAL =
+    requireConfigType("uiRefreshInterval", config.uiRefreshInterval, "number")
+local BASE_THRUST = requireConfigType("hover.baseThrust", hoverConfig.baseThrust, "number")
+local THRUST_PER_Y_LEVEL =
+    requireConfigType("hover.thrustPerYLevel", hoverConfig.thrustPerYLevel, "number")
+local ALTITUDE_KP = requireConfigType("hover.altitudeKp", hoverConfig.altitudeKp, "number")
+local ALTITUDE_KD = requireConfigType("hover.altitudeKd", hoverConfig.altitudeKd, "number")
+local LEVEL_KP = requireConfigType("hover.levelKp", hoverConfig.levelKp, "number")
+local LEVEL_KD = requireConfigType("hover.levelKd", hoverConfig.levelKd, "number")
+local HORIZONTAL_KP =
+    requireConfigType("hover.horizontalKp", hoverConfig.horizontalKp, "number")
+local HORIZONTAL_KD =
+    requireConfigType("hover.horizontalKd", hoverConfig.horizontalKd, "number")
+local MAX_TILT_ERROR =
+    requireConfigType("hover.maxTiltError", hoverConfig.maxTiltError, "number")
+local YAW_THRUST_DIFFERENCE =
+    requireConfigType("hover.yawThrustDifference", hoverConfig.yawThrustDifference, "number")
+local YAW_KP = requireConfigType("hover.yawKp", hoverConfig.yawKp, "number")
+local YAW_KD = requireConfigType("hover.yawKd", hoverConfig.yawKd, "number")
+local MAX_YAW_CORRECTION =
+    requireConfigType("hover.maxYawCorrection", hoverConfig.maxYawCorrection, "number")
+local HORIZONTAL_MOVE_SPEED =
+    requireConfigType("hover.horizontalMoveSpeed", hoverConfig.horizontalMoveSpeed, "number")
+local VERTICAL_MOVE_SPEED =
+    requireConfigType("hover.verticalMoveSpeed", hoverConfig.verticalMoveSpeed, "number")
+local BALANCE_TIMEOUT = requireConfigType("balanceTimeout", config.balanceTimeout, "number")
+local GPS_TIMEOUT = requireConfigType("gpsTimeout", config.gpsTimeout, "number")
+
+local modem = peripheral.find("modem")
+if modem == nil or not modem.isWireless() then
+    fatalError("can't find ender_modem!")
+end
+
+rednet.open(peripheral.getName(modem))
+
+local blockReader = peripheral.wrap(BLOCK_READER_SIDE)
+if blockReader == nil or not peripheral.hasType(BLOCK_READER_SIDE, "block_reader") then
+    fatalError("can't find advancedperipherals:block_reader at " .. BLOCK_READER_SIDE .. "!")
+end
+
+if blockReader.getBlockName() ~= NAVIGATION_TABLE_BLOCK then
+    fatalError("block reader isn't reading " .. NAVIGATION_TABLE_BLOCK .. "!")
+end
+
+local teleporter = peripheral.wrap(TELEPORTER_SIDE)
+if teleporter == nil then
+    fatalError("can't find teleporter!")
+end
+
+local redstoneRelayLeft = peripheral.wrap(REDSTONE_RELAY_LEFT_SIDE)
+local redstoneRelayRight = peripheral.wrap(REDSTONE_RELAY_RIGHT_SIDE)
+
+if redstoneRelayLeft == nil or redstoneRelayRight == nil then
+    fatalError("can't find redstone relays!")
+end
+
+-- -1 为左旋，0 为不自旋，1 为右旋。
+local yawCommand = 0
+
+-- 前后、左右和上下移动命令，范围为 -1 到 1。
+local forwardCommand = 0
+local rightCommand = 0
+local verticalCommand = 0
+
+local function moveBackward()
+    forwardCommand = -1
+end
+
+local function moveForward()
+    forwardCommand = 1
+end
+
+local function strafeLeft()
+    rightCommand = -1
+end
+
+local function rotateLeft()
+    yawCommand = -1
+end
+
+local function moveUp()
+    verticalCommand = 1
+end
+
+local function strafeRight()
+    rightCommand = 1
+end
+
+local function rotateRight()
+    yawCommand = 1
+end
+
+local function moveDown()
+    verticalCommand = -1
+end
+
+local hoverTargetX
+local hoverTargetY
+local hoverTargetZ
+local previousControllerX
+local previousControllerY
+local previousControllerZ
+local previousPitchError
+local previousRollError
+local previousHoverTime
+local hoverTargetYaw
+local previousYaw
+local powerEnabled
+local safetyShutdown = false
+local powerControllerX
+local powerControllerY
+local powerControllerZ
+local propellerThrust = {
+    left = 0,
+    right = 0,
+    front = 0,
+    back = 0,
+}
+
+local function clamp(value, minimum, maximum)
+    return math.max(minimum, math.min(maximum, value))
+end
+
+local function normalizeAngle(angle)
+    while angle > math.pi do
+        angle = angle - 2 * math.pi
+    end
+    while angle < -math.pi do
+        angle = angle + 2 * math.pi
+    end
+    return angle
+end
+
+local function sendPropellerThrust(side, thrust)
+    local roundedThrust = math.floor(clamp(thrust, 0, 15) + 0.5)
+    local redstoneStrength = 15 - roundedThrust
+    propellerThrust[side] = roundedThrust
+    rednet.send(propellerControllers[side], redstoneStrength, side)
+end
+
+local function stopAllPropellers()
+    sendPropellerThrust("front", 0)
+    sendPropellerThrust("back", 0)
+    sendPropellerThrust("left", 0)
+    sendPropellerThrust("right", 0)
+end
+
+local function resetHoverTarget()
+    hoverTargetX = nil
+    hoverTargetY = nil
+    hoverTargetZ = nil
+    previousControllerX = nil
+    previousControllerY = nil
+    previousControllerZ = nil
+    previousPitchError = nil
+    previousRollError = nil
+    previousHoverTime = nil
+    hoverTargetYaw = nil
+    previousYaw = nil
+end
+
+local function waitForPowerResponse()
+    local sender, state = rednet.receive("powerresp", POWER_RESPONSE_TIMEOUT)
+    if sender == POWER_CONTROLLER_ID and type(state) == "boolean" then
+        local wasEnabled = powerEnabled
+        powerEnabled = state
+        if wasEnabled == false and state then
+            resetHoverTarget()
+        end
+        return true
+    end
+
+    return false
+end
+
+local function requestPowerStatus()
+    rednet.send(POWER_CONTROLLER_ID, true, "powerstatus")
+    return waitForPowerResponse()
+end
+
+local function togglePower()
+    rednet.send(POWER_CONTROLLER_ID, true, "power")
+    local responseReceived = waitForPowerResponse()
+    if responseReceived and powerEnabled then
+        safetyShutdown = false
+    end
+    return responseReceived
+end
+
+local function emergencyPowerOff()
+    if safetyShutdown then
+        return
+    end
+
+    safetyShutdown = true
+    stopAllPropellers()
+    rednet.send(POWER_CONTROLLER_ID, false, "powerset")
+    powerEnabled = false
+    resetHoverTarget()
+end
+
+local function requestPowerPosition()
+    rednet.send(POWER_CONTROLLER_ID, true, "powerpos")
+
+    local sender, response = rednet.receive("powerposresp", POWER_RESPONSE_TIMEOUT)
+    if sender ~= POWER_CONTROLLER_ID
+        or type(response) ~= "table"
+        or response[1] ~= "power"
+    then
+        powerControllerX = nil
+        powerControllerY = nil
+        powerControllerZ = nil
+        return false
+    end
+
+    local x = response[2]
+    local y = response[3]
+    local z = response[4]
+    if type(x) ~= "number" or type(y) ~= "number" or type(z) ~= "number" then
+        powerControllerX = nil
+        powerControllerY = nil
+        powerControllerZ = nil
+        return false
+    end
+
+    powerControllerX = x
+    powerControllerY = y
+    powerControllerZ = z
+    return true
+end
+
+local function drawPowerUi(message)
+    term.clear()
+    term.setCursorPos(1, 1)
+    print("Drone Controller")
+    print("")
+
+    if powerEnabled == nil then
+        print("Power: UNKNOWN")
+    elseif powerEnabled then
+        print("Power: ON")
+    else
+        print("Power: OFF")
+    end
+
+    if powerControllerX == nil then
+        print("Power position: UNKNOWN")
+    else
+        print(("Power position: %.2f %.2f %.2f"):format(
+            powerControllerX,
+            powerControllerY,
+            powerControllerZ
+        ))
+    end
+
+    print("")
+    print(("Thrust F:%d B:%d"):format(propellerThrust.front, propellerThrust.back))
+    print(("Thrust L:%d R:%d"):format(propellerThrust.left, propellerThrust.right))
+    print(("Signal F:%d B:%d"):format(15 - propellerThrust.front, 15 - propellerThrust.back))
+    print(("Signal L:%d R:%d"):format(15 - propellerThrust.left, 15 - propellerThrust.right))
+
+    print("")
+    print("Press Enter to toggle power")
+
+    if safetyShutdown then
+        local previousColor = term.getTextColor()
+        term.setTextColor(colors.red)
+        print("")
+        print("SAFETY SHUTDOWN: controller below power controller")
+        print("Restore shape, then press Enter to restart")
+        term.setTextColor(previousColor)
+    end
+
+    if message then
+        print("")
+        print(message)
+    end
+end
+
+local function readPropellerPositions()
+    local positions = {}
+    local remaining = 0
+
+    for _, controllerId in pairs(propellerControllers) do
+        rednet.send(controllerId, true, "balance")
+        remaining = remaining + 1
+    end
+
+    local timer = os.startTimer(BALANCE_TIMEOUT)
+    while remaining > 0 do
+        local event, first, second, third = os.pullEvent()
+
+        if event == "timer" and first == timer then
+            break
+        end
+
+        if event == "rednet_message" and third == "balanceresp" then
+            local sender = first
+            local response = second
+            local side = type(response) == "table" and response[1]
+
+            if propellerControllers[side] == sender
+                and type(response[2]) == "number"
+                and type(response[3]) == "number"
+                and type(response[4]) == "number"
+                and positions[side] == nil
+            then
+                positions[side] = {
+                    x = response[2],
+                    y = response[3],
+                    z = response[4],
+                }
+                remaining = remaining - 1
+            end
+        end
+    end
+
+    if remaining > 0 then
+        return nil
+    end
+
+    return positions
+end
+
+local function updateHover()
+    if powerEnabled ~= true then
+        return
+    end
+
+    local controllerX, controllerY, controllerZ = gps.locate(GPS_TIMEOUT, false)
+    if controllerX == nil or controllerY == nil or controllerZ == nil then
+        return
+    end
+
+    if powerControllerY ~= nil and controllerY < powerControllerY then
+        emergencyPowerOff()
+        return
+    end
+
+    local propellerPositions = readPropellerPositions()
+    if propellerPositions == nil then
+        return
+    end
+
+    local now = os.epoch("utc") / 1000
+    if hoverTargetY == nil then
+        hoverTargetX = controllerX
+        hoverTargetY = controllerY
+        hoverTargetZ = controllerZ
+    end
+
+    local deltaTime = previousHoverTime and now - previousHoverTime or nil
+    local velocityX = 0
+    local verticalVelocity = 0
+    local velocityZ = 0
+    local pitchRate = 0
+    local rollRate = 0
+    local yawRate = 0
+
+    local pitchError = propellerPositions.front.y - propellerPositions.back.y
+    local rollError = propellerPositions.left.y - propellerPositions.right.y
+
+    if deltaTime and deltaTime > 0 then
+        velocityX = (controllerX - previousControllerX) / deltaTime
+        verticalVelocity = (controllerY - previousControllerY) / deltaTime
+        velocityZ = (controllerZ - previousControllerZ) / deltaTime
+        pitchRate = (pitchError - previousPitchError) / deltaTime
+        rollRate = (rollError - previousRollError) / deltaTime
+    end
+
+    local forwardX = propellerPositions.front.x - propellerPositions.back.x
+    local forwardZ = propellerPositions.front.z - propellerPositions.back.z
+    local forwardLength = math.sqrt(forwardX * forwardX + forwardZ * forwardZ)
+    local rightX = propellerPositions.right.x - propellerPositions.left.x
+    local rightZ = propellerPositions.right.z - propellerPositions.left.z
+    local rightLength = math.sqrt(rightX * rightX + rightZ * rightZ)
+
+    if forwardLength == 0 or rightLength == 0 then
+        return
+    end
+
+    forwardX = forwardX / forwardLength
+    forwardZ = forwardZ / forwardLength
+    rightX = rightX / rightLength
+    rightZ = rightZ / rightLength
+
+    local movementDeltaTime = clamp(deltaTime or 0, 0, 0.5)
+    local forwardDistance = forwardCommand * HORIZONTAL_MOVE_SPEED * movementDeltaTime
+    local rightDistance = rightCommand * HORIZONTAL_MOVE_SPEED * movementDeltaTime
+    hoverTargetX = hoverTargetX + forwardX * forwardDistance + rightX * rightDistance
+    hoverTargetY = hoverTargetY + verticalCommand * VERTICAL_MOVE_SPEED * movementDeltaTime
+    hoverTargetZ = hoverTargetZ + forwardZ * forwardDistance + rightZ * rightDistance
+
+    local yaw = math.atan2(forwardZ, forwardX)
+    if hoverTargetYaw == nil or yawCommand ~= 0 then
+        hoverTargetYaw = yaw
+    end
+    if deltaTime and deltaTime > 0 and previousYaw ~= nil then
+        yawRate = normalizeAngle(yaw - previousYaw) / deltaTime
+    end
+
+    local positionErrorX = hoverTargetX - controllerX
+    local positionErrorZ = hoverTargetZ - controllerZ
+    local forwardPositionError = positionErrorX * forwardX + positionErrorZ * forwardZ
+    local rightPositionError = positionErrorX * rightX + positionErrorZ * rightZ
+    local forwardVelocity = velocityX * forwardX + velocityZ * forwardZ
+    local rightVelocity = velocityX * rightX + velocityZ * rightZ
+
+    local forwardPositionCommand =
+        HORIZONTAL_KP * forwardPositionError - HORIZONTAL_KD * forwardVelocity
+    local rightPositionCommand =
+        HORIZONTAL_KP * rightPositionError - HORIZONTAL_KD * rightVelocity
+    local desiredPitchError =
+        -clamp(forwardPositionCommand, -MAX_TILT_ERROR, MAX_TILT_ERROR)
+    local desiredRollError =
+        clamp(rightPositionCommand, -MAX_TILT_ERROR, MAX_TILT_ERROR)
+
+    local altitudeCorrection =
+        ALTITUDE_KP * (hoverTargetY - controllerY) - ALTITUDE_KD * verticalVelocity
+    local hoverThrust = BASE_THRUST + hoverTargetY * THRUST_PER_Y_LEVEL
+    local pitchCorrection =
+        -LEVEL_KP * (pitchError - desiredPitchError) - LEVEL_KD * pitchRate
+    local rollCorrection =
+        -LEVEL_KP * (rollError - desiredRollError) - LEVEL_KD * rollRate
+    local yawCorrection
+    if yawCommand == 0 then
+        local yawError = normalizeAngle(hoverTargetYaw - yaw)
+        yawCorrection = clamp(
+            YAW_KP * yawError - YAW_KD * yawRate,
+            -MAX_YAW_CORRECTION,
+            MAX_YAW_CORRECTION
+        )
+    else
+        yawCorrection = yawCommand * YAW_THRUST_DIFFERENCE
+    end
+
+    -- 前后桨逆时针旋转，增强时机体向右自旋；左右桨顺时针旋转，增强时向左自旋。
+    sendPropellerThrust(
+        "front",
+        hoverThrust + altitudeCorrection + pitchCorrection + yawCorrection
+    )
+    sendPropellerThrust(
+        "back",
+        hoverThrust + altitudeCorrection - pitchCorrection + yawCorrection
+    )
+    sendPropellerThrust(
+        "left",
+        hoverThrust + altitudeCorrection + rollCorrection - yawCorrection
+    )
+    sendPropellerThrust(
+        "right",
+        hoverThrust + altitudeCorrection - rollCorrection - yawCorrection
+    )
+
+    previousControllerX = controllerX
+    previousControllerY = controllerY
+    previousControllerZ = controllerZ
+    previousPitchError = pitchError
+    previousRollError = rollError
+    previousHoverTime = now
+    previousYaw = yaw
+end
+
+local function updateCurrentTarget()
+    local navigationData = blockReader.getBlockData()
+    local currentStack = navigationData and navigationData.CurrentStack
+
+    if type(currentStack) ~= "table" or next(currentStack) == nil then
+        currentTargetX = nil
+        currentTargetY = nil
+        currentTargetZ = nil
+        return
+    end
+
+    local target = navigationData.CurrentTarget
+    local x = target and (target.x or target.X or target[1])
+    local y = target and (target.y or target.Y or target[2])
+    local z = target and (target.z or target.Z or target[3])
+
+    if type(x) ~= "number" or type(y) ~= "number" or type(z) ~= "number" then
+        currentTargetX = nil
+        currentTargetY = nil
+        currentTargetZ = nil
+        return
+    end
+
+    currentTargetX = x
+    currentTargetY = y
+    currentTargetZ = z
+end
+
+local function controlLoop()
+    while true do
+        updateCurrentTarget()
+
+        local backward = redstone.getInput("front")
+        local forward = redstone.getInput("back")
+        local left = redstoneRelayLeft.getInput("left")
+        local rotateLeftInput = redstoneRelayLeft.getInput("top")
+        local up = redstoneRelayLeft.getInput("bottom")
+        local right = redstoneRelayRight.getInput("right")
+        local rotateRightInput = redstoneRelayRight.getInput("top")
+        local down = redstoneRelayRight.getInput("bottom")
+
+        yawCommand = 0
+        forwardCommand = 0
+        rightCommand = 0
+        verticalCommand = 0
+
+        if backward and not forward then
+            moveBackward()
+        end
+
+        if forward and not backward then
+            moveForward()
+        end
+
+        if left and not right then
+            strafeLeft()
+        end
+
+        if rotateLeftInput and not rotateRightInput then
+            rotateLeft()
+        end
+
+        if up and not down then
+            moveUp()
+        end
+
+        if right and not left then
+            strafeRight()
+        end
+
+        if rotateRightInput and not rotateLeftInput then
+            rotateRight()
+        end
+
+        if down and not up then
+            moveDown()
+        end
+
+        updateHover()
+        os.sleep(0.05)
+    end
+end
+
+local function powerUiLoop()
+    drawPowerUi("Syncing power status...")
+
+    local statusAvailable = requestPowerStatus()
+    local positionAvailable = requestPowerPosition()
+    if statusAvailable and positionAvailable then
+        drawPowerUi()
+    else
+        drawPowerUi("Power controller did not respond")
+    end
+
+    local refreshTimer = os.startTimer(UI_REFRESH_INTERVAL)
+    while true do
+        local event, value = os.pullEvent()
+
+        if event == "key" and value == keys.enter then
+            drawPowerUi("Waiting for power controller...")
+
+            if togglePower() then
+                drawPowerUi()
+            else
+                drawPowerUi("Power controller did not respond")
+            end
+            refreshTimer = os.startTimer(UI_REFRESH_INTERVAL)
+        elseif event == "timer" and value == refreshTimer then
+            if safetyShutdown then
+                stopAllPropellers()
+                rednet.send(POWER_CONTROLLER_ID, false, "powerset")
+                requestPowerStatus()
+            end
+            local positionUpdated = requestPowerPosition()
+            drawPowerUi(positionUpdated and nil or "Power position unavailable")
+            refreshTimer = os.startTimer(UI_REFRESH_INTERVAL)
+        end
+    end
+end
+
+parallel.waitForAll(controlLoop, powerUiLoop)
