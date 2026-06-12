@@ -29,12 +29,19 @@
 ## 运行要求
 
 - CC:Tweaked 计算机与无线/末影调制解调器
+- 《机械动力：航空学》
 - 可用的 GPS 网络
 - 四个支持有符号速度 `-256..256` 的 `electric_motor`
 - 一个电源控制器
 - 两个 Redstone Relay
 - Advanced Peripherals Block Reader
 - `simulated:navigation_table`
+
+## 分支
+
+- `electric_motor`：使用 `electric_motor` 和 Rednet 控制有符号电机速度的主要版本
+- `analog_transmission`：使用红石模拟信号进行 16 档转速控制的版本
+- `electric_motor_attitude_correction`：基于电机版本，实验性加入倒置姿态恢复
 
 ## 快速开始
 
