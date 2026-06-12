@@ -37,6 +37,9 @@
 - Advanced Peripherals Block Reader
 - `simulated:navigation_table`
 
+示例蓝图使用 Mekanism 作为电机功能实现。使用其他可提供兼容 `electric_motor` 接口的
+方案时，可根据实际安装方式调整动力控制器和配置。
+
 ## 分支
 
 - `electric_motor`：使用 `electric_motor` 和 Rednet 控制有符号电机速度的主要版本
