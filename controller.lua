@@ -398,38 +398,6 @@ local navigationTableSuppressed = false
 local navigationTableClearedAfterSuppression = false
 local manualNavigationPauseUntil = 0
 
-local function moveBackward()
-    forwardCommand = -1
-end
-
-local function moveForward()
-    forwardCommand = 1
-end
-
-local function strafeLeft()
-    rightCommand = -1
-end
-
-local function rotateLeft()
-    yawCommand = -1
-end
-
-local function moveUp()
-    verticalCommand = 1
-end
-
-local function strafeRight()
-    rightCommand = 1
-end
-
-local function rotateRight()
-    yawCommand = 1
-end
-
-local function moveDown()
-    verticalCommand = -1
-end
-
 local hoverTargetX
 local hoverTargetY
 local hoverTargetZ
@@ -1003,46 +971,46 @@ local function applyCurrentNavigationTarget()
     hoverTargetZ = currentTargetZ
 end
 
-local function updateHover()
+local hoverLoop = {}
+
+function hoverLoop.updateControllerPosition()
     local locatedX, locatedY, locatedZ = gps.locate(GPS_TIMEOUT, false)
     if locatedX == nil or locatedY == nil or locatedZ == nil then
         controllerX = nil
         controllerY = nil
         controllerZ = nil
         unsafePositionSince = nil
-        return
+        return false
     end
+
     controllerX = locatedX
     controllerY = locatedY
     controllerZ = locatedZ
+    return true
+end
 
+function hoverLoop.readCurrentPose()
     local propellerPose = readPropellerPose()
     if propellerPose == nil then
         currentYaw = nil
-        return
+        return nil
     end
+
     local gimbalPose = readGimbalSensorPose(propellerPose)
     if gimbalPose ~= nil then
         propellerPose = gimbalPose
     end
     propellerPose = filterPropellerPose(propellerPose)
 
-    local forwardX = propellerPose.forwardX
-    local forwardZ = propellerPose.forwardZ
-    local rightX = propellerPose.rightX
-    local rightZ = propellerPose.rightZ
     local normalY = propellerPose.normalY
     if uprightNormalSign == nil and math.abs(normalY) >= 0.25 then
         uprightNormalSign = normalY >= 0 and 1 or -1
     end
-
     currentYaw = propellerPose.yaw
+    return propellerPose
+end
 
-    if powerEnabled ~= true then
-        return
-    end
-
-    local now = os.epoch("utc") / 1000
+function hoverLoop.shouldEmergencyStop(normalY, now)
     local controllerClearlyBelowPower =
         powerControllerY ~= nil
         and controllerY + CONTROLLER_BELOW_POWER_TOLERANCE < powerControllerY
@@ -1052,42 +1020,61 @@ local function updateHover()
     if controllerClearlyBelowPower and inverted then
         unsafePositionSince = unsafePositionSince or now
         if now - unsafePositionSince >= SAFETY_SHUTDOWN_DELAY then
-            emergencyPowerOff()
-            return
+            return true
         end
     else
         unsafePositionSince = nil
     end
 
+    return false
+end
+
+function hoverLoop.ensureHoverTarget()
     if hoverTargetY == nil then
         hoverTargetX = controllerX
         hoverTargetY = clamp(controllerY, BASE_THRUST_REFERENCE_Y, MAXIMUM_HOVER_Y)
         hoverTargetZ = controllerZ
     end
+end
 
-    local deltaTime = previousHoverTime and now - previousHoverTime or nil
-    local velocityX = 0
-    local verticalVelocity = 0
-    local velocityZ = 0
-    local pitchRate = 0
-    local rollRate = 0
-    local yawRate = 0
+function hoverLoop.createHoverState(propellerPose, now)
+    local state = {
+        now = now,
+        deltaTime = previousHoverTime and now - previousHoverTime or nil,
+        velocityX = 0,
+        verticalVelocity = 0,
+        velocityZ = 0,
+        pitchRate = 0,
+        rollRate = 0,
+        yawRate = 0,
+        pitchError = propellerPose.pitchError,
+        rollError = propellerPose.rollError,
+        yaw = currentYaw,
+        forwardX = propellerPose.forwardX,
+        forwardZ = propellerPose.forwardZ,
+        rightX = propellerPose.rightX,
+        rightZ = propellerPose.rightZ,
+    }
 
-    local pitchError = propellerPose.pitchError
-    local rollError = propellerPose.rollError
-
-    if deltaTime and deltaTime > 0 then
-        velocityX = (controllerX - previousControllerX) / deltaTime
-        verticalVelocity = (controllerY - previousControllerY) / deltaTime
-        velocityZ = (controllerZ - previousControllerZ) / deltaTime
-        pitchRate = (pitchError - previousPitchError) / deltaTime
-        rollRate = (rollError - previousRollError) / deltaTime
+    if state.deltaTime and state.deltaTime > 0 then
+        state.velocityX = (controllerX - previousControllerX) / state.deltaTime
+        state.verticalVelocity = (controllerY - previousControllerY) / state.deltaTime
+        state.velocityZ = (controllerZ - previousControllerZ) / state.deltaTime
+        state.pitchRate = (state.pitchError - previousPitchError) / state.deltaTime
+        state.rollRate = (state.rollError - previousRollError) / state.deltaTime
     end
 
-    local movementDeltaTime = clamp(deltaTime or 0, 0, 0.5)
+    return state
+end
+
+function hoverLoop.updateHoverTargetFromCommands(state)
+    local movementDeltaTime = clamp(state.deltaTime or 0, 0, 0.5)
     local forwardDistance = forwardCommand * HORIZONTAL_MOVE_SPEED * movementDeltaTime
     local rightDistance = rightCommand * HORIZONTAL_MOVE_SPEED * movementDeltaTime
-    hoverTargetX = hoverTargetX + forwardX * forwardDistance + rightX * rightDistance
+    hoverTargetX =
+        hoverTargetX
+        + state.forwardX * forwardDistance
+        + state.rightX * rightDistance
     if verticalCommand > 0 then
         hoverTargetY = math.min(
             MAXIMUM_HOVER_Y,
@@ -1099,7 +1086,10 @@ local function updateHover()
             hoverTargetY - MAXIMUM_DESCENT_RATE * movementDeltaTime
         )
     end
-    hoverTargetZ = hoverTargetZ + forwardZ * forwardDistance + rightZ * rightDistance
+    hoverTargetZ =
+        hoverTargetZ
+        + state.forwardZ * forwardDistance
+        + state.rightZ * rightDistance
 
     -- 自动导航仅控制水平位置；任意手动操作会暂停本周期的自动导航。
     local manualNavigationPaused =
@@ -1108,20 +1098,25 @@ local function updateHover()
         applyCurrentNavigationTarget()
     end
 
-    local yaw = currentYaw
     if hoverTargetYaw == nil or yawCommand ~= 0 then
-        hoverTargetYaw = yaw
+        hoverTargetYaw = state.yaw
     end
-    if deltaTime and deltaTime > 0 and previousYaw ~= nil then
-        yawRate = normalizeAngle(yaw - previousYaw) / deltaTime
+    if state.deltaTime and state.deltaTime > 0 and previousYaw ~= nil then
+        state.yawRate = normalizeAngle(state.yaw - previousYaw) / state.deltaTime
     end
+end
 
+function hoverLoop.calculateHoverCorrections(state)
     local positionErrorX = hoverTargetX - controllerX
     local positionErrorZ = hoverTargetZ - controllerZ
-    local forwardPositionError = positionErrorX * forwardX + positionErrorZ * forwardZ
-    local rightPositionError = positionErrorX * rightX + positionErrorZ * rightZ
-    local forwardVelocity = velocityX * forwardX + velocityZ * forwardZ
-    local rightVelocity = velocityX * rightX + velocityZ * rightZ
+    local forwardPositionError =
+        positionErrorX * state.forwardX + positionErrorZ * state.forwardZ
+    local rightPositionError =
+        positionErrorX * state.rightX + positionErrorZ * state.rightZ
+    local forwardVelocity =
+        state.velocityX * state.forwardX + state.velocityZ * state.forwardZ
+    local rightVelocity =
+        state.velocityX * state.rightX + state.velocityZ * state.rightZ
 
     local forwardPositionCommand =
         HORIZONTAL_KP * forwardPositionError - HORIZONTAL_KD * forwardVelocity
@@ -1133,18 +1128,18 @@ local function updateHover()
         clamp(rightPositionCommand, -MAX_TILT_ERROR, MAX_TILT_ERROR)
 
     local altitudeCorrection =
-        ALTITUDE_KP * (hoverTargetY - controllerY) - ALTITUDE_KD * verticalVelocity
+        ALTITUDE_KP * (hoverTargetY - controllerY) - ALTITUDE_KD * state.verticalVelocity
     local hoverThrust =
         BASE_THRUST + (hoverTargetY - BASE_THRUST_REFERENCE_Y) * THRUST_PER_Y_LEVEL
     local pitchCorrection =
-        -LEVEL_KP * (pitchError - desiredPitchError) - LEVEL_KD * pitchRate
+        -LEVEL_KP * (state.pitchError - desiredPitchError) - LEVEL_KD * state.pitchRate
     local rollCorrection =
-        -LEVEL_KP * (rollError - desiredRollError) - LEVEL_KD * rollRate
+        -LEVEL_KP * (state.rollError - desiredRollError) - LEVEL_KD * state.rollRate
     local yawCorrection
     if yawCommand == 0 then
-        local yawError = normalizeAngle(hoverTargetYaw - yaw)
+        local yawError = normalizeAngle(hoverTargetYaw - state.yaw)
         yawCorrection = clamp(
-            -YAW_KP * yawError + YAW_KD * yawRate,
+            -YAW_KP * yawError + YAW_KD * state.yawRate,
             -MAX_YAW_CORRECTION,
             MAX_YAW_CORRECTION
         )
@@ -1155,31 +1150,71 @@ local function updateHover()
         yawCorrection = -yawCorrection
     end
 
+    return {
+        altitude = altitudeCorrection,
+        hover = hoverThrust,
+        pitch = pitchCorrection,
+        roll = rollCorrection,
+        yaw = yawCorrection,
+    }
+end
+
+function hoverLoop.applyHoverCorrections(correction)
     -- 前后桨逆时针旋转，增强时机体向右自旋；左右桨顺时针旋转，增强时向左自旋。
     sendMotorSpeed(
         "front",
-        hoverThrust + altitudeCorrection + pitchCorrection + yawCorrection
+        correction.hover + correction.altitude + correction.pitch + correction.yaw
     )
     sendMotorSpeed(
         "back",
-        hoverThrust + altitudeCorrection - pitchCorrection + yawCorrection
+        correction.hover + correction.altitude - correction.pitch + correction.yaw
     )
     sendMotorSpeed(
         "left",
-        hoverThrust + altitudeCorrection + rollCorrection - yawCorrection
+        correction.hover + correction.altitude + correction.roll - correction.yaw
     )
     sendMotorSpeed(
         "right",
-        hoverThrust + altitudeCorrection - rollCorrection - yawCorrection
+        correction.hover + correction.altitude - correction.roll - correction.yaw
     )
+end
 
+function hoverLoop.rememberHoverState(state)
     previousControllerX = controllerX
     previousControllerY = controllerY
     previousControllerZ = controllerZ
-    previousPitchError = pitchError
-    previousRollError = rollError
-    previousHoverTime = now
-    previousYaw = yaw
+    previousPitchError = state.pitchError
+    previousRollError = state.rollError
+    previousHoverTime = state.now
+    previousYaw = state.yaw
+end
+
+local function updateHover()
+    if not hoverLoop.updateControllerPosition() then
+        return
+    end
+
+    local propellerPose = hoverLoop.readCurrentPose()
+    if propellerPose == nil then
+        return
+    end
+
+    if powerEnabled ~= true then
+        return
+    end
+
+    local now = os.epoch("utc") / 1000
+    if hoverLoop.shouldEmergencyStop(propellerPose.normalY, now) then
+        emergencyPowerOff()
+        return
+    end
+
+    hoverLoop.ensureHoverTarget()
+
+    local state = hoverLoop.createHoverState(propellerPose, now)
+    hoverLoop.updateHoverTargetFromCommands(state)
+    hoverLoop.applyHoverCorrections(hoverLoop.calculateHoverCorrections(state))
+    hoverLoop.rememberHoverState(state)
 end
 
 local function updateCurrentTarget()
@@ -1396,35 +1431,35 @@ local function controlLoop()
         verticalCommand = 0
 
         if backward and not forward then
-            moveBackward()
+            forwardCommand = -1
         end
 
         if forward and not backward then
-            moveForward()
+            forwardCommand = 1
         end
 
         if left and not right then
-            strafeLeft()
+            rightCommand = -1
         end
 
         if rotateLeftInput and not rotateRightInput then
-            rotateLeft()
+            yawCommand = -1
         end
 
         if up and not down then
-            moveUp()
+            verticalCommand = 1
         end
 
         if right and not left then
-            strafeRight()
+            rightCommand = 1
         end
 
         if rotateRightInput and not rotateLeftInput then
-            rotateRight()
+            yawCommand = 1
         end
 
         if down and not up then
-            moveDown()
+            verticalCommand = -1
         end
 
         updateHover()
