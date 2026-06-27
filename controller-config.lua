@@ -29,6 +29,8 @@ return {
     -- 通信与 UI 超时，单位为秒。
     powerResponseTimeout = 1,
     balanceTimeout = 0.25,
+    -- 丢弃超过此 tick 数的动力控制器坐标包，1 tick 约为 0.05 秒。
+    balanceMaxPacketAgeTicks = 5,
     gpsTimeout = 0.25,
     uiRefreshInterval = 0.5,
 
@@ -100,6 +102,13 @@ return {
 
         -- 航向纠偏允许使用的最大差动推力。
         maxYawCorrection = 26,
+
+        -- 单次姿态采样允许的最大航向突变，单位为度；超过则丢弃本轮姿态。
+        maxPoseYawJumpDegrees = 45,
+
+        -- 单次姿态采样允许的最大前后/左右高度差突变，单位为格；超过则丢弃本轮姿态。
+        maxPosePitchJump = 1.5,
+        maxPoseRollJump = 1.5,
 
         -- 手动移动时悬停目标的水平移动速度，单位为格/秒。
         horizontalMoveSpeed = 1.5,

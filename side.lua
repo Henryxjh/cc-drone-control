@@ -36,8 +36,17 @@ end
 while true do
     local sender, message, rprotocol = rednet.receive()
     if (sender == controller and rprotocol == "balance") then
+        local seq = type(message) == "table" and message.seq or nil
         local x, y, z = gps.locate()
-        rednet.send(controller, {position, x, y, z}, "balanceresp")
+        rednet.send(controller, {
+            position,
+            x,
+            y,
+            z,
+            side = position,
+            seq = seq,
+            t = os.epoch("utc"),
+        }, "balanceresp")
         goto continue
     end
     if (sender == controller and rprotocol == position) then

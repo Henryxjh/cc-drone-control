@@ -147,6 +147,17 @@ local INVERTED_NORMAL_Y_THRESHOLD =
             "number"
         )
 local BALANCE_TIMEOUT = requireConfigType("balanceTimeout", config.balanceTimeout, "number")
+local BALANCE_MAX_PACKET_AGE_TICKS
+if config.balanceMaxPacketAgeTicks ~= nil then
+    BALANCE_MAX_PACKET_AGE_TICKS =
+        requireConfigType("balanceMaxPacketAgeTicks", config.balanceMaxPacketAgeTicks, "number")
+elseif config.balanceMaxPacketAgeMs ~= nil then
+    BALANCE_MAX_PACKET_AGE_TICKS =
+        math.ceil(requireConfigType("balanceMaxPacketAgeMs", config.balanceMaxPacketAgeMs, "number") / 50)
+else
+    BALANCE_MAX_PACKET_AGE_TICKS = math.ceil(BALANCE_TIMEOUT / 0.05)
+end
+local BALANCE_MAX_PACKET_AGE_MS = BALANCE_MAX_PACKET_AGE_TICKS * 50
 local GPS_TIMEOUT = requireConfigType("gpsTimeout", config.gpsTimeout, "number")
 
 if BASE_THRUST < MINIMUM_FLIGHT_SPEED or BASE_THRUST > MAXIMUM_FLIGHT_SPEED then
@@ -166,6 +177,9 @@ if INVERTED_NORMAL_Y_THRESHOLD < -1 or INVERTED_NORMAL_Y_THRESHOLD >= 0 then
 end
 if NAVIGATION_COMPLETION_DISTANCE < 0 then
     fatalError("invalid navigation.completionDistance: must be non-negative")
+end
+if BALANCE_TIMEOUT < 0 or BALANCE_MAX_PACKET_AGE_TICKS < 0 or GPS_TIMEOUT < 0 then
+    fatalError("invalid communication timeout: values must be non-negative")
 end
 
 local redstoneLogPath = fs.combine(fs.getDir(programPath), REDSTONE_LOG_PATH)
@@ -326,6 +340,14 @@ local motorSpeed = {
     right = 0,
     front = 0,
     back = 0,
+}
+local balanceSeq = 0
+local latestPropellerPositions = {}
+local poseCombinations = {
+    { "front", "back", "left" },
+    { "front", "back", "right" },
+    { "front", "left", "right" },
+    { "back", "left", "right" },
 }
 
 local function clamp(value, minimum, maximum)
@@ -615,49 +637,187 @@ local function drawPowerUi(message)
     end
 end
 
-local function readPropellerPositions()
-    local positions = {}
-    local remaining = 0
+local function midpoint(a, b)
+    return {
+        x = (a.x + b.x) / 2,
+        y = (a.y + b.y) / 2,
+        z = (a.z + b.z) / 2,
+    }
+end
+
+local function mirrorAcross(point, center)
+    return {
+        x = center.x * 2 - point.x,
+        y = center.y * 2 - point.y,
+        z = center.z * 2 - point.z,
+    }
+end
+
+local function vectorLength3d(x, y, z)
+    return math.sqrt(x * x + y * y + z * z)
+end
+
+local function clonePosition(position)
+    return {
+        x = position.x,
+        y = position.y,
+        z = position.z,
+    }
+end
+
+local function makePoseFromPositions(positions)
+    local p = {
+        front = positions.front and clonePosition(positions.front),
+        back = positions.back and clonePosition(positions.back),
+        left = positions.left and clonePosition(positions.left),
+        right = positions.right and clonePosition(positions.right),
+    }
+
+    if p.front == nil then
+        p.front = mirrorAcross(p.back, midpoint(p.left, p.right))
+    elseif p.back == nil then
+        p.back = mirrorAcross(p.front, midpoint(p.left, p.right))
+    elseif p.left == nil then
+        p.left = mirrorAcross(p.right, midpoint(p.front, p.back))
+    elseif p.right == nil then
+        p.right = mirrorAcross(p.left, midpoint(p.front, p.back))
+    end
+
+    local forwardX = p.front.x - p.back.x
+    local forwardY = p.front.y - p.back.y
+    local forwardZ = p.front.z - p.back.z
+    local rightX = p.right.x - p.left.x
+    local rightY = p.right.y - p.left.y
+    local rightZ = p.right.z - p.left.z
+    local forwardLength = math.sqrt(forwardX * forwardX + forwardZ * forwardZ)
+    local rightLength = math.sqrt(rightX * rightX + rightZ * rightZ)
+    local forwardLength3d = vectorLength3d(forwardX, forwardY, forwardZ)
+    local rightLength3d = vectorLength3d(rightX, rightY, rightZ)
+
+    if forwardLength == 0 or rightLength == 0 or forwardLength3d == 0 or rightLength3d == 0 then
+        return nil
+    end
+
+    return {
+        forwardX = forwardX / forwardLength,
+        forwardZ = forwardZ / forwardLength,
+        rightX = rightX / rightLength,
+        rightZ = rightZ / rightLength,
+        normalY = (forwardZ * rightX - forwardX * rightZ) / (forwardLength3d * rightLength3d),
+        yaw = math.atan2(forwardZ, forwardX),
+        pitchError = p.front.y - p.back.y,
+        rollError = p.left.y - p.right.y,
+    }
+end
+
+local function isFreshPropellerPosition(position, nowMs)
+    return position
+        and nowMs - position.t <= BALANCE_MAX_PACKET_AGE_MS
+        and nowMs - position.receivedAt <= BALANCE_MAX_PACKET_AGE_MS
+end
+
+local function buildBestPropellerPose(nowMs)
+    local bestPositions
+    local bestScore
+
+    for _, combination in ipairs(poseCombinations) do
+        local positions = {}
+        local oldest = math.huge
+        local newest = -math.huge
+        local complete = true
+
+        for _, side in ipairs(combination) do
+            local position = latestPropellerPositions[side]
+            if not isFreshPropellerPosition(position, nowMs) then
+                complete = false
+                break
+            end
+
+            positions[side] = position
+            oldest = math.min(oldest, position.t)
+            newest = math.max(newest, position.t)
+        end
+
+        if complete then
+            local score = newest - oldest
+            if bestScore == nil or score < bestScore then
+                bestPositions = positions
+                bestScore = score
+            end
+        end
+    end
+
+    if bestPositions == nil then
+        return nil
+    end
+
+    return makePoseFromPositions(bestPositions)
+end
+
+local function receiveBalanceResponse(sender, response, expectedSeq, nowMs)
+    if type(response) ~= "table" then
+        return false
+    end
+
+    local side = response.side or response[1]
+    local x = response.x or response[2]
+    local y = response.y or response[3]
+    local z = response.z or response[4]
+    local seq = response.seq
+    local t = response.t
+
+    if motorControllers[side] ~= sender
+        or seq ~= expectedSeq
+        or type(x) ~= "number"
+        or type(y) ~= "number"
+        or type(z) ~= "number"
+        or type(t) ~= "number"
+        or nowMs - t > BALANCE_MAX_PACKET_AGE_MS
+    then
+        return false
+    end
+
+    latestPropellerPositions[side] = {
+        x = x,
+        y = y,
+        z = z,
+        seq = seq,
+        t = t,
+        receivedAt = nowMs,
+    }
+    return true
+end
+
+local function readPropellerPose()
+    balanceSeq = balanceSeq + 1
+    local seq = balanceSeq
+    local currentResponses = 0
+    local receivedSides = {}
 
     for _, controllerId in pairs(motorControllers) do
-        rednet.send(controllerId, true, "balance")
-        remaining = remaining + 1
+        rednet.send(controllerId, { seq = seq, t = os.epoch("utc") }, "balance")
     end
 
     local timer = os.startTimer(BALANCE_TIMEOUT)
-    while remaining > 0 do
+    while currentResponses < 3 do
         local event, first, second, third = os.pullEvent()
+        local nowMs = os.epoch("utc")
 
         if event == "timer" and first == timer then
             break
         end
 
         if event == "rednet_message" and third == "balanceresp" then
-            local sender = first
-            local response = second
-            local side = type(response) == "table" and response[1]
-
-            if motorControllers[side] == sender
-                and type(response[2]) == "number"
-                and type(response[3]) == "number"
-                and type(response[4]) == "number"
-                and positions[side] == nil
-            then
-                positions[side] = {
-                    x = response[2],
-                    y = response[3],
-                    z = response[4],
-                }
-                remaining = remaining - 1
+            local side = type(second) == "table" and (second.side or second[1])
+            if not receivedSides[side] and receiveBalanceResponse(first, second, seq, nowMs) then
+                receivedSides[side] = true
+                currentResponses = currentResponses + 1
             end
         end
     end
 
-    if remaining > 0 then
-        return nil
-    end
-
-    return positions
+    os.cancelTimer(timer)
+    return buildBestPropellerPose(os.epoch("utc"))
 end
 
 local function applyCurrentNavigationTarget()
@@ -682,42 +842,22 @@ local function updateHover()
     controllerY = locatedY
     controllerZ = locatedZ
 
-    local propellerPositions = readPropellerPositions()
-    if propellerPositions == nil then
+    local propellerPose = readPropellerPose()
+    if propellerPose == nil then
         currentYaw = nil
         return
     end
 
-    local forwardX = propellerPositions.front.x - propellerPositions.back.x
-    local forwardY = propellerPositions.front.y - propellerPositions.back.y
-    local forwardZ = propellerPositions.front.z - propellerPositions.back.z
-    local forwardLength = math.sqrt(forwardX * forwardX + forwardZ * forwardZ)
-    local rightX = propellerPositions.right.x - propellerPositions.left.x
-    local rightY = propellerPositions.right.y - propellerPositions.left.y
-    local rightZ = propellerPositions.right.z - propellerPositions.left.z
-    local rightLength = math.sqrt(rightX * rightX + rightZ * rightZ)
-    local forwardLength3d =
-        math.sqrt(forwardX * forwardX + forwardY * forwardY + forwardZ * forwardZ)
-    local rightLength3d =
-        math.sqrt(rightX * rightX + rightY * rightY + rightZ * rightZ)
-
-    if forwardLength == 0 or rightLength == 0 or forwardLength3d == 0 or rightLength3d == 0 then
-        currentYaw = nil
-        unsafePositionSince = nil
-        return
-    end
-
-    local normalY =
-        (forwardZ * rightX - forwardX * rightZ) / (forwardLength3d * rightLength3d)
+    local forwardX = propellerPose.forwardX
+    local forwardZ = propellerPose.forwardZ
+    local rightX = propellerPose.rightX
+    local rightZ = propellerPose.rightZ
+    local normalY = propellerPose.normalY
     if uprightNormalSign == nil and math.abs(normalY) >= 0.25 then
         uprightNormalSign = normalY >= 0 and 1 or -1
     end
 
-    forwardX = forwardX / forwardLength
-    forwardZ = forwardZ / forwardLength
-    rightX = rightX / rightLength
-    rightZ = rightZ / rightLength
-    currentYaw = math.atan2(forwardZ, forwardX)
+    currentYaw = propellerPose.yaw
 
     if powerEnabled ~= true then
         return
@@ -754,8 +894,8 @@ local function updateHover()
     local rollRate = 0
     local yawRate = 0
 
-    local pitchError = propellerPositions.front.y - propellerPositions.back.y
-    local rollError = propellerPositions.left.y - propellerPositions.right.y
+    local pitchError = propellerPose.pitchError
+    local rollError = propellerPose.rollError
 
     if deltaTime and deltaTime > 0 then
         velocityX = (controllerX - previousControllerX) / deltaTime

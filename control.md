@@ -37,7 +37,7 @@ local reverse = false
 - 主控制器使用 `position` 作为 rednet protocol，消息内容为 `-256..256` 的电机速度
 - 动力控制器调用 `electric_motor.setSpeed(speed)`
 - `reverse = true` 会反转收到的速度，用于修正电机安装方向
-- protocol 为 `balance` 时，动力控制器返回 `{position, x, y, z}`
+- protocol 为 `balance` 时，主控制器发送 `{seq = n, t = utc_ms}`，动力控制器返回 `{position, x, y, z, side = position, seq = n, t = utc_ms}`
 - protocol 为 `speed` 时，动力控制器返回电机当前实际速度
 
 正常悬停时，四台动力控制器接收到的正速度都必须产生向上推力。
@@ -295,16 +295,22 @@ maximumDescentRate = 1.0
 ```lua
 powerResponseTimeout = 1
 balanceTimeout = 0.25
+balanceMaxPacketAgeTicks = 5
 gpsTimeout = 0.25
 uiRefreshInterval = 0.5
 ```
 
 - `powerResponseTimeout`：等待电源控制器响应的最长时间
-- `balanceTimeout`：等待四个螺旋桨坐标响应的最长时间
+- `balanceTimeout`：等待本轮螺旋桨坐标响应的最长时间
+- `balanceMaxPacketAgeTicks`：丢弃动力控制器坐标包的最大年龄，单位为 tick，1 tick 约为 0.05 秒
 - `gpsTimeout`：控制器自身 GPS 定位超时
 - `uiRefreshInterval`：控制器 UI 刷新间隔
 
-超时时间过短会导致控制周期经常跳过，过长会降低控制响应速度。网络不稳定时优先略微增大 `balanceTimeout` 和 `gpsTimeout`。
+主控制器会给每轮 `balance` 请求分配 `seq`，只接收同一轮 `seq` 的响应。响应包里的 `t` 使用 `os.epoch("utc")`，超过 `balanceMaxPacketAgeTicks` 对应时间的包会被丢弃。
+
+姿态计算不再强制等待四个螺旋桨坐标全部返回，而是从最近未过期坐标中选择时间跨度最小的 3 个非共线点，按机体对称关系补齐缺失的第四点，再计算航向、俯仰误差和横滚误差。这样可以降低单个动力控制器响应延迟过高对控制周期的影响。
+
+超时时间过短会导致控制周期经常跳过，过长会降低控制响应速度。网络不稳定时优先略微增大 `balanceTimeout`、`balanceMaxPacketAgeTicks` 和 `gpsTimeout`。
 
 ## 平稳优先起始配置
 
