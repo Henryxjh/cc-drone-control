@@ -120,6 +120,22 @@ local YAW_KP = requireConfigType("hover.yawKp", hoverConfig.yawKp, "number")
 local YAW_KD = requireConfigType("hover.yawKd", hoverConfig.yawKd, "number")
 local MAX_YAW_CORRECTION =
     requireConfigType("hover.maxYawCorrection", hoverConfig.maxYawCorrection, "number")
+local MAX_POSE_YAW_JUMP =
+    math.rad(hoverConfig.maxPoseYawJumpDegrees == nil
+        and 45
+        or requireConfigType(
+            "hover.maxPoseYawJumpDegrees",
+            hoverConfig.maxPoseYawJumpDegrees,
+            "number"
+        ))
+local MAX_POSE_PITCH_JUMP =
+    hoverConfig.maxPosePitchJump == nil
+    and 1.5
+    or requireConfigType("hover.maxPosePitchJump", hoverConfig.maxPosePitchJump, "number")
+local MAX_POSE_ROLL_JUMP =
+    hoverConfig.maxPoseRollJump == nil
+    and 1.5
+    or requireConfigType("hover.maxPoseRollJump", hoverConfig.maxPoseRollJump, "number")
 local HORIZONTAL_MOVE_SPEED =
     requireConfigType("hover.horizontalMoveSpeed", hoverConfig.horizontalMoveSpeed, "number")
 local MAXIMUM_CLIMB_RATE =
@@ -177,6 +193,9 @@ if INVERTED_NORMAL_Y_THRESHOLD < -1 or INVERTED_NORMAL_Y_THRESHOLD >= 0 then
 end
 if NAVIGATION_COMPLETION_DISTANCE < 0 then
     fatalError("invalid navigation.completionDistance: must be non-negative")
+end
+if MAX_POSE_YAW_JUMP < 0 or MAX_POSE_PITCH_JUMP < 0 or MAX_POSE_ROLL_JUMP < 0 then
+    fatalError("invalid pose jump filter: thresholds must be non-negative")
 end
 if BALANCE_TIMEOUT < 0 or BALANCE_MAX_PACKET_AGE_TICKS < 0 or GPS_TIMEOUT < 0 then
     fatalError("invalid communication timeout: values must be non-negative")
@@ -343,6 +362,7 @@ local motorSpeed = {
 }
 local balanceSeq = 0
 local latestPropellerPositions = {}
+local poseFilterState = {}
 local poseCombinations = {
     { "front", "back", "left" },
     { "front", "back", "right" },
@@ -408,6 +428,9 @@ local function resetHoverTarget()
     previousHoverTime = nil
     hoverTargetYaw = nil
     previousYaw = nil
+    poseFilterState.yaw = nil
+    poseFilterState.pitchError = nil
+    poseFilterState.rollError = nil
     unsafePositionSince = nil
 end
 
@@ -820,6 +843,26 @@ local function readPropellerPose()
     return buildBestPropellerPose(os.epoch("utc"))
 end
 
+local function acceptPropellerPose(pose)
+    if poseFilterState.yaw ~= nil then
+        local yawJump = math.abs(normalizeAngle(pose.yaw - poseFilterState.yaw))
+        local pitchJump = math.abs(pose.pitchError - poseFilterState.pitchError)
+        local rollJump = math.abs(pose.rollError - poseFilterState.rollError)
+
+        if yawJump > MAX_POSE_YAW_JUMP
+            or pitchJump > MAX_POSE_PITCH_JUMP
+            or rollJump > MAX_POSE_ROLL_JUMP
+        then
+            return false
+        end
+    end
+
+    poseFilterState.yaw = pose.yaw
+    poseFilterState.pitchError = pose.pitchError
+    poseFilterState.rollError = pose.rollError
+    return true
+end
+
 local function applyCurrentNavigationTarget()
     if currentTargetX == nil or currentTargetZ == nil or navigationCompleted then
         return
@@ -844,6 +887,10 @@ local function updateHover()
 
     local propellerPose = readPropellerPose()
     if propellerPose == nil then
+        currentYaw = nil
+        return
+    end
+    if not acceptPropellerPose(propellerPose) then
         currentYaw = nil
         return
     end

@@ -310,6 +310,8 @@ uiRefreshInterval = 0.5
 
 姿态计算不再强制等待四个螺旋桨坐标全部返回，而是从最近未过期坐标中选择时间跨度最小的 3 个非共线点，按机体对称关系补齐缺失的第四点，再计算航向、俯仰误差和横滚误差。这样可以降低单个动力控制器响应延迟过高对控制周期的影响。
 
+计算出的航向、俯仰误差或横滚误差如果相对上一帧突变超过 `maxPoseYawJumpDegrees`、`maxPosePitchJump` 或 `maxPoseRollJump`，本轮姿态会被丢弃，不进入安全停机和 PID 输出。
+
 超时时间过短会导致控制周期经常跳过，过长会降低控制响应速度。网络不稳定时优先略微增大 `balanceTimeout`、`balanceMaxPacketAgeTicks` 和 `gpsTimeout`。
 
 ## 平稳优先起始配置
@@ -337,6 +339,10 @@ hover = {
     yawKd = 4.0,
     maxYawCorrection = 17,
 
+    maxPoseYawJumpDegrees = 45,
+    maxPosePitchJump = 1.5,
+    maxPoseRollJump = 1.5,
+
     horizontalMoveSpeed = 1.0,
     maximumClimbRate = 0.75,
     maximumDescentRate = 0.75,
@@ -356,6 +362,8 @@ hover = {
 | 悬停时自旋 | 增大 `yawKp` 或 `yawKd` |
 | 航向左右抖动 | 降低 `yawKp`、`yawKd` |
 | 自旋造成高度变化 | 降低 `yawThrustDifference` 或 `maxYawCorrection` |
+| 姿态偶发跳变 | 降低 `maxPoseYawJumpDegrees`、`maxPosePitchJump`、`maxPoseRollJump` |
+| 大幅机动时姿态经常丢失 | 增大 `maxPoseYawJumpDegrees`、`maxPosePitchJump`、`maxPoseRollJump` |
 | 手动移动过于激进 | 降低移动速度参数 |
 
 电源从关闭切换到开启后，主控制器会自动重启并重新加载 `controller-config.lua`。电源控制器保持开启；主控制器启动后会使用新的 GPS 坐标和航向作为悬停目标。
