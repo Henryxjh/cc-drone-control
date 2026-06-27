@@ -77,6 +77,39 @@ redstoneLogging = false
 
 组合键触发时，前后和左右信号两两互斥，因此不会产生移动命令。旋转与升降信号不参与组合键判断。
 
+## 姿态传感器校准
+
+`gimbal-calibrate.lua` 是独立测试程序，用于为 `simulated:gimbal_sensor` 生成配置片段。
+运行前需要：
+
+- 主控制器能通过无线 modem 访问四个动力控制器
+- 四个动力控制器已使用带 `seq` 和 `t` 的新版 `side.lua`
+- Block Reader 正在读取 `simulated:gimbal_sensor`
+- 无人机保持倾斜且静止，最好同时包含前后和左右两个方向的倾斜
+
+运行：
+
+```lua
+shell.run("gimbal-calibrate.lua")
+```
+
+程序会询问：
+
+- 姿态传感器 Block Reader 所在方向
+- 无人机正向对应传感器的 `north/east/south/west` 方向
+- `ScrollValue1` 对应 `east_west` 还是 `south_north`
+- 四个动力控制器 ID 和采样次数
+
+程序会读取传感器 `Powers`，同时通过 `balance` 协议读取四个螺旋桨坐标计算真实
+`pitchError` 与 `rollError`，再推断传感器轴向和正负号。输出会写入：
+
+```text
+gimbal-config-snippet.lua
+```
+
+如果输出中的 `pitchSign` 或 `rollSign` 为 `nil`，说明当前倾斜姿态在对应轴上的变化太小。
+把无人机调整成更明显的前后/左右倾斜后重新运行。
+
 ## Navigation Table 自动导航
 
 当 `simulated:navigation_table` 的 `CurrentStack` 包含物品，并且 `CurrentTarget` 包含有效 X/Z 坐标时，控制器会持续将悬停目标的 X/Z 设置为导航坐标。

@@ -23,6 +23,7 @@
 | `controller-config.lua` | 主控制器配置与 PID 参数 |
 | `side.lua` | 单个螺旋桨动力控制器 |
 | `power.lua` | 电源控制器与自定义导航终端 |
+| `gimbal-calibrate.lua` | 姿态传感器配置校准工具 |
 | `control.md` | 完整部署、协议和调参说明 |
 | `calculate_thrust_rate.py` | 根据实测数据计算每格动力增长率 |
 
