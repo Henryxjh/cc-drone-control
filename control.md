@@ -310,7 +310,7 @@ uiRefreshInterval = 0.5
 
 姿态计算不再强制等待四个螺旋桨坐标全部返回，而是从最近未过期坐标中选择时间跨度最小的 3 个非共线点，按机体对称关系补齐缺失的第四点，再计算航向、俯仰误差和横滚误差。这样可以降低单个动力控制器响应延迟过高对控制周期的影响。
 
-计算出的航向、俯仰误差或横滚误差如果相对上一帧突变超过 `maxPoseYawJumpDegrees`、`maxPosePitchJump` 或 `maxPoseRollJump`，本轮姿态会被丢弃，不进入安全停机和 PID 输出。
+计算出的航向、俯仰误差或横滚误差如果相对上一帧突变超过 `maxPoseYawJumpDegrees`、`maxPosePitchJump` 或 `maxPoseRollJump`，本轮会沿用上一帧已接受姿态，避免单帧异常数据进入安全停机和 PID 输出。
 
 超时时间过短会导致控制周期经常跳过，过长会降低控制响应速度。网络不稳定时优先略微增大 `balanceTimeout`、`balanceMaxPacketAgeTicks` 和 `gpsTimeout`。
 

@@ -428,9 +428,7 @@ local function resetHoverTarget()
     previousHoverTime = nil
     hoverTargetYaw = nil
     previousYaw = nil
-    poseFilterState.yaw = nil
-    poseFilterState.pitchError = nil
-    poseFilterState.rollError = nil
+    poseFilterState.pose = nil
     unsafePositionSince = nil
 end
 
@@ -843,24 +841,37 @@ local function readPropellerPose()
     return buildBestPropellerPose(os.epoch("utc"))
 end
 
-local function acceptPropellerPose(pose)
-    if poseFilterState.yaw ~= nil then
-        local yawJump = math.abs(normalizeAngle(pose.yaw - poseFilterState.yaw))
-        local pitchJump = math.abs(pose.pitchError - poseFilterState.pitchError)
-        local rollJump = math.abs(pose.rollError - poseFilterState.rollError)
+local function clonePose(pose)
+    return {
+        forwardX = pose.forwardX,
+        forwardZ = pose.forwardZ,
+        rightX = pose.rightX,
+        rightZ = pose.rightZ,
+        normalY = pose.normalY,
+        yaw = pose.yaw,
+        pitchError = pose.pitchError,
+        rollError = pose.rollError,
+    }
+end
+
+local function filterPropellerPose(pose)
+    local previousPose = poseFilterState.pose
+    if previousPose ~= nil then
+        local yawJump = math.abs(normalizeAngle(pose.yaw - previousPose.yaw))
+        local pitchJump = math.abs(pose.pitchError - previousPose.pitchError)
+        local rollJump = math.abs(pose.rollError - previousPose.rollError)
 
         if yawJump > MAX_POSE_YAW_JUMP
             or pitchJump > MAX_POSE_PITCH_JUMP
             or rollJump > MAX_POSE_ROLL_JUMP
         then
-            return false
+            return previousPose
         end
     end
 
-    poseFilterState.yaw = pose.yaw
-    poseFilterState.pitchError = pose.pitchError
-    poseFilterState.rollError = pose.rollError
-    return true
+    local acceptedPose = clonePose(pose)
+    poseFilterState.pose = acceptedPose
+    return acceptedPose
 end
 
 local function applyCurrentNavigationTarget()
@@ -890,10 +901,7 @@ local function updateHover()
         currentYaw = nil
         return
     end
-    if not acceptPropellerPose(propellerPose) then
-        currentYaw = nil
-        return
-    end
+    propellerPose = filterPropellerPose(propellerPose)
 
     local forwardX = propellerPose.forwardX
     local forwardZ = propellerPose.forwardZ
