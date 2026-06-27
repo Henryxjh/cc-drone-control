@@ -425,6 +425,7 @@ local forwardCommand = 0
 local rightCommand = 0
 local verticalCommand = 0
 local allSignalsToggleLatched = false
+local powerToggleGesture = { false, false, false, false, nil }
 local manualControlActive = false
 local navigationWasActive = false
 local navigationResetPending = false
@@ -617,6 +618,46 @@ local function emergencyPowerOff()
     rednet.send(POWER_CONTROLLER_ID, false, "powerset")
     powerEnabled = false
     resetHoverTarget()
+end
+
+local function updatePowerToggleGesture(backward, forward, left, right)
+    local anyInput = backward or forward or left or right
+    if not anyInput then
+        allSignalsToggleLatched = false
+        powerToggleGesture[1] = false
+        powerToggleGesture[2] = false
+        powerToggleGesture[3] = false
+        powerToggleGesture[4] = false
+        powerToggleGesture[5] = nil
+        return
+    end
+
+    if allSignalsToggleLatched then
+        return
+    end
+
+    local now = os.epoch("utc")
+    if powerToggleGesture[5] == nil or now - powerToggleGesture[5] > 200 then
+        powerToggleGesture[1] = false
+        powerToggleGesture[2] = false
+        powerToggleGesture[3] = false
+        powerToggleGesture[4] = false
+        powerToggleGesture[5] = now
+    end
+
+    powerToggleGesture[1] = powerToggleGesture[1] or backward
+    powerToggleGesture[2] = powerToggleGesture[2] or forward
+    powerToggleGesture[3] = powerToggleGesture[3] or left
+    powerToggleGesture[4] = powerToggleGesture[4] or right
+
+    if powerToggleGesture[1]
+        and powerToggleGesture[2]
+        and powerToggleGesture[3]
+        and powerToggleGesture[4]
+    then
+        allSignalsToggleLatched = true
+        rednet.send(POWER_CONTROLLER_ID, true, "power")
+    end
 end
 
 local function requestPowerPosition()
@@ -1434,11 +1475,6 @@ local function controlLoop()
         local right = redstoneRelayRight.getInput("right")
         local rotateRightInput = redstoneRelayRight.getInput("top")
         local down = redstoneRelayRight.getInput("bottom")
-        local allSignalsActive =
-            backward
-            and forward
-            and left
-            and right
         manualControlActive =
             backward
             or forward
@@ -1460,12 +1496,7 @@ local function controlLoop()
             down = down,
         })
 
-        if allSignalsActive and not allSignalsToggleLatched then
-            allSignalsToggleLatched = true
-            rednet.send(POWER_CONTROLLER_ID, true, "power")
-        elseif not allSignalsActive then
-            allSignalsToggleLatched = false
-        end
+        updatePowerToggleGesture(backward, forward, left, right)
 
         yawCommand = 0
         forwardCommand = 0
