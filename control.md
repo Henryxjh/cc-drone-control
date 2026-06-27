@@ -149,6 +149,10 @@ gimbalSensor = {
 `pitchSign` 和 `rollSign` 建议使用 `gimbal-calibrate.lua` 生成。任意一个为 `nil` 时，
 姿态传感器不会参与主飞控。
 
+`pitchMaxAngleDegrees` 和 `rollMaxAngleDegrees` 是备用值。飞控启动时如果 Block Reader
+实际读取到姿态传感器，会自动从方块数据的 `ScrollValue1/2` 读取 power 满量程角度，
+并按 `scrollValue1Axis` 和 `forwardDirection` 换算到 pitch/roll 轴。
+
 ## Navigation Table 自动导航
 
 当 `simulated:navigation_table` 的 `CurrentStack` 包含物品，并且 `CurrentTarget` 包含有效 X/Z 坐标时，控制器会持续将悬停目标的 X/Z 设置为导航坐标。

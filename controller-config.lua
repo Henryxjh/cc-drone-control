@@ -34,7 +34,8 @@ return {
         pitchSign = nil,
         rollSign = nil,
 
-        -- 传感器 power 满量程时对应的角度。
+        -- 传感器 power 满量程时对应的角度。启动时读到姿态传感器时会自动覆盖，
+        -- 这里仅作为未连接或读取失败时的备用值。
         pitchMaxAngleDegrees = 45,
         rollMaxAngleDegrees = 45,
 

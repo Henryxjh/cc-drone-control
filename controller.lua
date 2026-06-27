@@ -346,6 +346,40 @@ local blockReader
 local navigationTableReader
 local gimbalSensorReader
 local blockReaderStatus
+
+local function loadGimbalSensorAngles(reader)
+    local dataOk, data = pcall(reader.getBlockData)
+    if not dataOk or type(data) ~= "table" then
+        return
+    end
+
+    local scroll1 = tonumber(data.ScrollValue1)
+    local scroll2 = tonumber(data.ScrollValue2)
+    if scroll1 == nil or scroll2 == nil then
+        return
+    end
+
+    scroll1 = math.floor(math.abs(scroll1) + 0.5)
+    scroll2 = math.floor(math.abs(scroll2) + 0.5)
+
+    local eastWestMaxAngle
+    local southNorthMaxAngle
+    if GIMBAL_SCROLL_VALUE_1_AXIS == "east_west" then
+        eastWestMaxAngle = scroll1
+        southNorthMaxAngle = scroll2
+    else
+        eastWestMaxAngle = scroll2
+        southNorthMaxAngle = scroll1
+    end
+
+    local pitchUsesEastWest =
+        GIMBAL_FORWARD_DIRECTION == "east" or GIMBAL_FORWARD_DIRECTION == "west"
+    GIMBAL_PITCH_MAX_ANGLE_DEGREES =
+        pitchUsesEastWest and eastWestMaxAngle or southNorthMaxAngle
+    GIMBAL_ROLL_MAX_ANGLE_DEGREES =
+        pitchUsesEastWest and southNorthMaxAngle or eastWestMaxAngle
+end
+
 if BLOCK_READER_SIDE == nil then
     blockReaderStatus = "not configured"
 elseif not peripheral.hasType(BLOCK_READER_SIDE, "block_reader") then
@@ -360,6 +394,7 @@ else
         blockReaderStatus = "navigation table"
     elseif blockName == GIMBAL_SENSOR_BLOCK then
         gimbalSensorReader = blockReader
+        loadGimbalSensorAngles(gimbalSensorReader)
         if GIMBAL_PITCH_SIGN == nil or GIMBAL_ROLL_SIGN == nil then
             blockReaderStatus = "gimbal sensor not calibrated"
         else
