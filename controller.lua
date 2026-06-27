@@ -37,11 +37,17 @@ local safetyConfig = config.safety or {}
 requireConfigType("safety", safetyConfig, "table")
 local navigationConfig = config.navigation or {}
 requireConfigType("navigation", navigationConfig, "table")
+local blockReaderConfig = config.blockReader or {}
+requireConfigType("blockReader", blockReaderConfig, "table")
+local gimbalSensorConfig = config.gimbalSensor or {}
+requireConfigType("gimbalSensor", gimbalSensorConfig, "table")
 local motorControllers =
     requireConfigType("motorControllers", config.motorControllers, "table")
 
 local BLOCK_READER_SIDE =
-    requireConfigType("peripherals.blockReader", peripherals.blockReader, "string")
+    peripherals.blockReader == nil
+    and nil
+    or requireConfigType("peripherals.blockReader", peripherals.blockReader, "string")
 local TELEPORTER_SIDE =
     requireConfigType("peripherals.teleporter", peripherals.teleporter, "string")
 local REDSTONE_RELAY_LEFT_SIDE =
@@ -49,7 +55,61 @@ local REDSTONE_RELAY_LEFT_SIDE =
 local REDSTONE_RELAY_RIGHT_SIDE =
     requireConfigType("peripherals.redstoneRelayRight", peripherals.redstoneRelayRight, "string")
 local NAVIGATION_TABLE_BLOCK =
-    requireConfigType("navigationTableBlock", config.navigationTableBlock, "string")
+    blockReaderConfig.navigationTableBlock ~= nil
+    and requireConfigType(
+        "blockReader.navigationTableBlock",
+        blockReaderConfig.navigationTableBlock,
+        "string"
+    )
+    or (
+        config.navigationTableBlock ~= nil
+        and requireConfigType("navigationTableBlock", config.navigationTableBlock, "string")
+        or "simulated:navigation_table"
+    )
+local GIMBAL_SENSOR_BLOCK =
+    blockReaderConfig.gimbalSensorBlock == nil
+    and "simulated:gimbal_sensor"
+    or requireConfigType("blockReader.gimbalSensorBlock", blockReaderConfig.gimbalSensorBlock, "string")
+local GIMBAL_FORWARD_DIRECTION =
+    gimbalSensorConfig.forwardDirection == nil
+    and "north"
+    or requireConfigType("gimbalSensor.forwardDirection", gimbalSensorConfig.forwardDirection, "string")
+local GIMBAL_SCROLL_VALUE_1_AXIS =
+    gimbalSensorConfig.scrollValue1Axis == nil
+    and "east_west"
+    or requireConfigType("gimbalSensor.scrollValue1Axis", gimbalSensorConfig.scrollValue1Axis, "string")
+local GIMBAL_PITCH_SIGN =
+    gimbalSensorConfig.pitchSign == nil
+    and nil
+    or requireConfigType("gimbalSensor.pitchSign", gimbalSensorConfig.pitchSign, "number")
+local GIMBAL_ROLL_SIGN =
+    gimbalSensorConfig.rollSign == nil
+    and nil
+    or requireConfigType("gimbalSensor.rollSign", gimbalSensorConfig.rollSign, "number")
+local GIMBAL_PITCH_MAX_ANGLE_DEGREES =
+    gimbalSensorConfig.pitchMaxAngleDegrees == nil
+    and 45
+    or requireConfigType(
+        "gimbalSensor.pitchMaxAngleDegrees",
+        gimbalSensorConfig.pitchMaxAngleDegrees,
+        "number"
+    )
+local GIMBAL_ROLL_MAX_ANGLE_DEGREES =
+    gimbalSensorConfig.rollMaxAngleDegrees == nil
+    and 45
+    or requireConfigType(
+        "gimbalSensor.rollMaxAngleDegrees",
+        gimbalSensorConfig.rollMaxAngleDegrees,
+        "number"
+    )
+local GIMBAL_PITCH_ARM_DISTANCE =
+    gimbalSensorConfig.pitchArmDistance == nil
+    and 12
+    or requireConfigType("gimbalSensor.pitchArmDistance", gimbalSensorConfig.pitchArmDistance, "number")
+local GIMBAL_ROLL_ARM_DISTANCE =
+    gimbalSensorConfig.rollArmDistance == nil
+    and 12
+    or requireConfigType("gimbalSensor.rollArmDistance", gimbalSensorConfig.rollArmDistance, "number")
 local NAVIGATION_COMPLETION_DISTANCE =
     navigationConfig.completionDistance == nil
     and 1.0
@@ -91,6 +151,18 @@ if MINIMUM_FLIGHT_SPEED < MINIMUM_MOTOR_SPEED or MAXIMUM_FLIGHT_SPEED > MAXIMUM_
 end
 if MINIMUM_FLIGHT_SPEED >= MAXIMUM_FLIGHT_SPEED then
     fatalError("invalid propulsion range: minimumFlightSpeed must be below maximumFlightSpeed")
+end
+if GIMBAL_FORWARD_DIRECTION ~= "north"
+    and GIMBAL_FORWARD_DIRECTION ~= "east"
+    and GIMBAL_FORWARD_DIRECTION ~= "south"
+    and GIMBAL_FORWARD_DIRECTION ~= "west"
+then
+    fatalError("invalid gimbalSensor.forwardDirection")
+end
+if GIMBAL_SCROLL_VALUE_1_AXIS ~= "east_west"
+    and GIMBAL_SCROLL_VALUE_1_AXIS ~= "south_north"
+then
+    fatalError("invalid gimbalSensor.scrollValue1Axis")
 end
 
 local BASE_THRUST = requireConfigType("hover.baseThrust", hoverConfig.baseThrust, "number")
@@ -197,6 +269,13 @@ end
 if MAX_POSE_YAW_JUMP < 0 or MAX_POSE_PITCH_JUMP < 0 or MAX_POSE_ROLL_JUMP < 0 then
     fatalError("invalid pose jump filter: thresholds must be non-negative")
 end
+if GIMBAL_PITCH_MAX_ANGLE_DEGREES < 0
+    or GIMBAL_ROLL_MAX_ANGLE_DEGREES < 0
+    or GIMBAL_PITCH_ARM_DISTANCE <= 0
+    or GIMBAL_ROLL_ARM_DISTANCE <= 0
+then
+    fatalError("invalid gimbal sensor config: angles must be non-negative and distances positive")
+end
 if BALANCE_TIMEOUT < 0 or BALANCE_MAX_PACKET_AGE_TICKS < 0 or GPS_TIMEOUT < 0 then
     fatalError("invalid communication timeout: values must be non-negative")
 end
@@ -256,13 +335,32 @@ end
 
 rednet.open(peripheral.getName(modem))
 
-local blockReader = peripheral.wrap(BLOCK_READER_SIDE)
-if blockReader == nil or not peripheral.hasType(BLOCK_READER_SIDE, "block_reader") then
-    fatalError("can't find advancedperipherals:block_reader at " .. BLOCK_READER_SIDE .. "!")
-end
-
-if blockReader.getBlockName() ~= NAVIGATION_TABLE_BLOCK then
-    fatalError("block reader isn't reading " .. NAVIGATION_TABLE_BLOCK .. "!")
+local blockReader
+local navigationTableReader
+local gimbalSensorReader
+local blockReaderStatus
+if BLOCK_READER_SIDE == nil then
+    blockReaderStatus = "not configured"
+elseif not peripheral.hasType(BLOCK_READER_SIDE, "block_reader") then
+    blockReaderStatus = "unavailable at " .. BLOCK_READER_SIDE
+else
+    blockReader = peripheral.wrap(BLOCK_READER_SIDE)
+    local ok, blockName = pcall(blockReader.getBlockName)
+    if not ok or type(blockName) ~= "string" then
+        blockReaderStatus = "failed to read block name"
+    elseif blockName == NAVIGATION_TABLE_BLOCK then
+        navigationTableReader = blockReader
+        blockReaderStatus = "navigation table"
+    elseif blockName == GIMBAL_SENSOR_BLOCK then
+        gimbalSensorReader = blockReader
+        if GIMBAL_PITCH_SIGN == nil or GIMBAL_ROLL_SIGN == nil then
+            blockReaderStatus = "gimbal sensor not calibrated"
+        else
+            blockReaderStatus = "gimbal sensor"
+        end
+    else
+        blockReaderStatus = "unsupported block: " .. blockName
+    end
 end
 
 local teleporter = peripheral.wrap(TELEPORTER_SIDE)
@@ -553,108 +651,86 @@ local function getTheoreticalHoverSpeed()
     ))
 end
 
+local function formatPosition(x, y, z)
+    if x == nil or y == nil or z == nil then
+        return "UNKNOWN"
+    end
+
+    return ("%.1f %.1f %.1f"):format(x, y, z)
+end
+
+local function truncateLine(value, width)
+    value = tostring(value):gsub("\r", " "):gsub("\n", " ")
+    width = math.max(1, math.floor(width or 1))
+    if #value <= width then
+        return value
+    end
+    if width <= 3 then
+        return string.sub(value, 1, width)
+    end
+    return string.sub(value, 1, width - 3) .. "..."
+end
+
+local function printUiLine(label, value, width)
+    print(truncateLine(label .. value, width))
+end
+
 local function drawPowerUi(message)
     term.clear()
     term.setCursorPos(1, 1)
-    print("Drone Controller")
-    print("")
+    local width = term.getSize()
 
+    local powerText
     if powerEnabled == nil then
-        print("Power: UNKNOWN")
+        powerText = "UNKNOWN"
     elseif powerEnabled then
-        print("Power: ON")
+        powerText = "ON"
     else
-        print("Power: OFF")
+        powerText = "OFF"
     end
+    printUiLine("Drone Controller PWR:", powerText, width)
 
-    if powerControllerX == nil or powerControllerY == nil or powerControllerZ == nil then
-        print("Power position: UNKNOWN")
-    else
-        print(("Power position: %.2f %.2f %.2f"):format(
-            powerControllerX,
-            powerControllerY,
-            powerControllerZ
-        ))
-    end
+    printUiLine("PowerPos: ", formatPosition(powerControllerX, powerControllerY, powerControllerZ), width)
+    printUiLine("CtrlPos : ", formatPosition(controllerX, controllerY, controllerZ), width)
+    printUiLine("Hover   : ", formatPosition(hoverTargetX, hoverTargetY, hoverTargetZ), width)
 
-    if controllerX == nil or controllerY == nil or controllerZ == nil then
-        print("Controller position: UNKNOWN")
-    else
-        print(("Controller position: %.2f %.2f %.2f"):format(
-            controllerX,
-            controllerY,
-            controllerZ
-        ))
-    end
-
-    if hoverTargetX == nil or hoverTargetY == nil or hoverTargetZ == nil then
-        print("Hover target: UNKNOWN")
-    else
-        print(("Hover target: %.2f %.2f %.2f"):format(
-            hoverTargetX,
-            hoverTargetY,
-            hoverTargetZ
-        ))
-    end
-
+    local navigationText
     if currentTargetX == nil or currentTargetZ == nil then
-        print("Navigation target: NONE")
-    elseif navigationCompleted then
-        print(("Navigation target: %.2f %.2f %.2f COMPLETE (%s)"):format(
-            currentTargetX,
-            currentTargetY or hoverTargetY or 0,
-            currentTargetZ,
-            currentNavigationSource or "UNKNOWN"
-        ))
+        navigationText = "NONE"
     else
-        print(("Navigation target: %.2f %.2f %.2f (%s)"):format(
+        navigationText = ("%.1f %.1f %.1f %s%s"):format(
             currentTargetX,
             currentTargetY or hoverTargetY or 0,
             currentTargetZ,
-            currentNavigationSource or "UNKNOWN"
-        ))
+            currentNavigationSource or "UNKNOWN",
+            navigationCompleted and " DONE" or ""
+        )
     end
+    printUiLine("Nav     : ", navigationText, width)
+    printUiLine("Reader  : ", blockReaderStatus or "unknown", width)
 
     local currentHeading = yawToHeading(currentYaw)
     local targetHeading = yawToHeading(hoverTargetYaw)
-    if currentHeading == nil then
-        print("Heading: UNKNOWN")
-    else
-        print(("Heading: %.1f deg"):format(currentHeading))
-    end
-    if targetHeading == nil then
-        print("Target heading: UNKNOWN")
-    else
-        print(("Target heading: %.1f deg"):format(targetHeading))
-    end
+    local currentHeadingText = currentHeading == nil and "UNK" or ("%.1f"):format(currentHeading)
+    local targetHeadingText = targetHeading == nil and "UNK" or ("%.1f"):format(targetHeading)
+    printUiLine("Heading : ", ("%s -> %s"):format(currentHeadingText, targetHeadingText), width)
 
     local theoreticalHoverSpeed = getTheoreticalHoverSpeed()
-    if theoreticalHoverSpeed == nil then
-        print("Theoretical hover speed: UNKNOWN")
-    else
-        print(("Theoretical hover speed: %d"):format(theoreticalHoverSpeed))
-    end
+    printUiLine("HoverRPM: ", theoreticalHoverSpeed == nil and "UNKNOWN" or tostring(theoreticalHoverSpeed), width)
 
-    print("")
-    print(("Cmd F:%d B:%d"):format(motorSpeed.front, motorSpeed.back))
-    print(("Cmd L:%d R:%d"):format(motorSpeed.left, motorSpeed.right))
-    print(("Motor range: %d to %d"):format(MINIMUM_MOTOR_SPEED, MAXIMUM_MOTOR_SPEED))
-
-    print("")
-    print("Press Enter to toggle power")
+    printUiLine("", ("Cmd F:%d B:%d"):format(motorSpeed.front, motorSpeed.back), width)
+    printUiLine("", ("Cmd L:%d R:%d"):format(motorSpeed.left, motorSpeed.right), width)
+    printUiLine("", ("Range %d..%d Enter=Power"):format(MINIMUM_MOTOR_SPEED, MAXIMUM_MOTOR_SPEED), width)
 
     if safetyShutdown then
         local previousColor = term.getTextColor()
         term.setTextColor(colors.red)
-        print("")
-        print("SAFETY SHUTDOWN: inverted flight detected")
-        print("Restore shape, then press Enter to restart")
+        printUiLine("", "SAFETY: inverted, restore then Enter", width)
         term.setTextColor(previousColor)
     end
 
     if message then
-        print("")
-        print(message)
+        print(truncateLine(message, width))
     end
 end
 
@@ -841,6 +917,17 @@ local function readPropellerPose()
     return buildBestPropellerPose(os.epoch("utc"))
 end
 
+local function directionVector(direction)
+    if direction == "east" then
+        return 1, 0
+    elseif direction == "west" then
+        return -1, 0
+    elseif direction == "south" then
+        return 0, 1
+    end
+    return 0, -1
+end
+
 local function clonePose(pose)
     return {
         forwardX = pose.forwardX,
@@ -852,6 +939,39 @@ local function clonePose(pose)
         pitchError = pose.pitchError,
         rollError = pose.rollError,
     }
+end
+
+local function readGimbalSensorPose(basePose)
+    if gimbalSensorReader == nil or GIMBAL_PITCH_SIGN == nil or GIMBAL_ROLL_SIGN == nil then
+        return nil
+    end
+
+    local ok, data = pcall(gimbalSensorReader.getBlockData)
+    if not ok or type(data) ~= "table" or data.id ~= GIMBAL_SENSOR_BLOCK then
+        return nil
+    end
+
+    local powers = data.Powers
+    if type(powers) ~= "table" then
+        return nil
+    end
+
+    local eastWest = (powers.east or 0) - (powers.west or 0)
+    local southNorth = (powers.south or 0) - (powers.north or 0)
+    local forwardX, forwardZ = directionVector(GIMBAL_FORWARD_DIRECTION)
+    local rightX = -forwardZ
+    local rightZ = forwardX
+    local pitchPower = (eastWest * forwardX + southNorth * forwardZ) * GIMBAL_PITCH_SIGN
+    local rollPower = (eastWest * rightX + southNorth * rightZ) * GIMBAL_ROLL_SIGN
+    local pitchAngle =
+        math.rad(clamp(pitchPower / 15, -1, 1) * GIMBAL_PITCH_MAX_ANGLE_DEGREES)
+    local rollAngle =
+        math.rad(clamp(rollPower / 15, -1, 1) * GIMBAL_ROLL_MAX_ANGLE_DEGREES)
+    local pose = clonePose(basePose)
+
+    pose.pitchError = math.sin(pitchAngle) * GIMBAL_PITCH_ARM_DISTANCE
+    pose.rollError = math.sin(rollAngle) * GIMBAL_ROLL_ARM_DISTANCE
+    return pose
 end
 
 local function filterPropellerPose(pose)
@@ -900,6 +1020,10 @@ local function updateHover()
     if propellerPose == nil then
         currentYaw = nil
         return
+    end
+    local gimbalPose = readGimbalSensorPose(propellerPose)
+    if gimbalPose ~= nil then
+        propellerPose = gimbalPose
     end
     propellerPose = filterPropellerPose(propellerPose)
 
@@ -1068,7 +1192,13 @@ local function updateCurrentTarget()
         z = customNavigationTargetZ
         source = "CUSTOM"
     else
-        local navigationData = blockReader.getBlockData()
+        local navigationData
+        if navigationTableReader ~= nil then
+            local ok, data = pcall(navigationTableReader.getBlockData)
+            if ok and type(data) == "table" then
+                navigationData = data
+            end
+        end
         local currentStack = navigationData and navigationData.CurrentStack
         local navigationTableHasData =
             type(currentStack) == "table" and next(currentStack) ~= nil

@@ -35,8 +35,8 @@
 - 四个支持有符号速度 `-256..256` 的 `electric_motor`
 - 一个电源控制器
 - 两个 Redstone Relay
-- Advanced Peripherals Block Reader
-- `simulated:navigation_table`
+- 可选：Advanced Peripherals Block Reader
+- 可选：`simulated:navigation_table` 或 `simulated:gimbal_sensor`
 
 示例蓝图使用 Mekanism 作为电机功能实现。使用其他可提供兼容 `electric_motor` 接口的
 方案时，可根据实际安装方式调整动力控制器和配置。

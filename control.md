@@ -110,6 +110,45 @@ gimbal-config-snippet.lua
 如果输出中的 `pitchSign` 或 `rollSign` 为 `nil`，说明当前倾斜姿态在对应轴上的变化太小。
 把无人机调整成更明显的前后/左右倾斜后重新运行。
 
+## Block Reader 自动识别
+
+主控制器不再强制要求 Block Reader 存在。Block Reader 不存在、读取方块不匹配或读取失败时，
+控制器仍会继续启动，只是对应功能不可用。
+
+```lua
+blockReader = {
+    navigationTableBlock = "simulated:navigation_table",
+    gimbalSensorBlock = "simulated:gimbal_sensor",
+}
+```
+
+- 读取到 `navigationTableBlock` 时启用 Navigation Table 自动导航
+- 读取到 `gimbalSensorBlock` 时启用姿态传感器；校准配置有效时用于 pitch/roll，yaw 仍由螺旋桨坐标计算
+- 读取到其他方块、没有配置 Block Reader 或外设不可用时，不启用任何 Block Reader 功能
+
+主控制器 UI 会显示当前 Block Reader 状态。未支持的方块只会显示为 `unsupported block`，
+不会导致程序退出。
+
+姿态传感器读取失败、未校准或输出异常时，主控制器会回退到螺旋桨坐标姿态。
+
+姿态传感器配置：
+
+```lua
+gimbalSensor = {
+    forwardDirection = "north",
+    scrollValue1Axis = "east_west",
+    pitchSign = nil,
+    rollSign = nil,
+    pitchMaxAngleDegrees = 45,
+    rollMaxAngleDegrees = 45,
+    pitchArmDistance = 12,
+    rollArmDistance = 12,
+}
+```
+
+`pitchSign` 和 `rollSign` 建议使用 `gimbal-calibrate.lua` 生成。任意一个为 `nil` 时，
+姿态传感器不会参与主飞控。
+
 ## Navigation Table 自动导航
 
 当 `simulated:navigation_table` 的 `CurrentStack` 包含物品，并且 `CurrentTarget` 包含有效 X/Z 坐标时，控制器会持续将悬停目标的 X/Z 设置为导航坐标。
@@ -146,7 +185,7 @@ navigation = {
 
 自定义导航完成后，主控制器会自动清除自定义目标，并通知电源控制器清除其目标显示。
 完成后无人机会直接悬停，并忽略 Navigation Table 当前的数据。控制器观察到
-`getBlockData().CurrentStack` 变为空表 `{}` 后，会等待它再次包含数据；出现新数据时
+Navigation Table 的 `CurrentStack` 变为空表 `{}` 后，会等待它再次包含数据；出现新数据时
 解除忽略并导航到导航台目标。忽略期间仍可接收新的自定义导航目标。
 
 电源控制器程序运行期间会保留最近一次输入的自定义目标。主控制器开电重启后会主动重新

@@ -7,12 +7,40 @@ return {
         redstoneRelayRight = "right",
     },
 
-    -- Block Reader 必须读取的方块注册名。
-    navigationTableBlock = "simulated:navigation_table",
+    blockReader = {
+        -- Block Reader 不存在、方块不匹配或读取失败时，控制器仍会继续启动。
+        -- 实际连接到导航台或姿态传感器时，控制器会按读取到的方块自动启用对应功能。
+
+        -- 读取到此方块时启用 Navigation Table 自动导航。
+        navigationTableBlock = "simulated:navigation_table",
+
+        -- 读取到此方块时启用姿态传感器。
+        gimbalSensorBlock = "simulated:gimbal_sensor",
+    },
 
     navigation = {
         -- 与 Navigation Table 目标的水平距离不超过此值时，视为导航完成。
         completionDistance = 1.0,
+    },
+
+    gimbalSensor = {
+        -- 无人机正向对应姿态传感器的方向：north、east、south、west。
+        forwardDirection = "north",
+
+        -- ScrollValue1 对应的传感器轴：east_west 或 south_north。
+        scrollValue1Axis = "east_west",
+
+        -- 由 gimbal-calibrate.lua 生成；为 nil 时不会使用姿态传感器参与飞控。
+        pitchSign = nil,
+        rollSign = nil,
+
+        -- 传感器 power 满量程时对应的角度。
+        pitchMaxAngleDegrees = 45,
+        rollMaxAngleDegrees = 45,
+
+        -- 前后/左右螺旋桨间距。
+        pitchArmDistance = 12,
+        rollArmDistance = 12,
     },
 
     -- 四个动力控制器的计算机 ID。
