@@ -44,10 +44,10 @@ requireConfigType("gimbalSensor", gimbalSensorConfig, "table")
 local motorControllers =
     requireConfigType("motorControllers", config.motorControllers, "table")
 
-local BLOCK_READER_SIDE =
-    peripherals.blockReader == nil
-    and nil
-    or requireConfigType("peripherals.blockReader", peripherals.blockReader, "string")
+local BLOCK_READER_SIDE = peripherals.blockReader
+if BLOCK_READER_SIDE ~= nil then
+    BLOCK_READER_SIDE = requireConfigType("peripherals.blockReader", BLOCK_READER_SIDE, "string")
+end
 local TELEPORTER_SIDE =
     requireConfigType("peripherals.teleporter", peripherals.teleporter, "string")
 local REDSTONE_RELAY_LEFT_SIDE =
@@ -78,14 +78,14 @@ local GIMBAL_SCROLL_VALUE_1_AXIS =
     gimbalSensorConfig.scrollValue1Axis == nil
     and "east_west"
     or requireConfigType("gimbalSensor.scrollValue1Axis", gimbalSensorConfig.scrollValue1Axis, "string")
-local GIMBAL_PITCH_SIGN =
-    gimbalSensorConfig.pitchSign == nil
-    and nil
-    or requireConfigType("gimbalSensor.pitchSign", gimbalSensorConfig.pitchSign, "number")
-local GIMBAL_ROLL_SIGN =
-    gimbalSensorConfig.rollSign == nil
-    and nil
-    or requireConfigType("gimbalSensor.rollSign", gimbalSensorConfig.rollSign, "number")
+local GIMBAL_PITCH_SIGN = gimbalSensorConfig.pitchSign
+if GIMBAL_PITCH_SIGN ~= nil then
+    GIMBAL_PITCH_SIGN = requireConfigType("gimbalSensor.pitchSign", GIMBAL_PITCH_SIGN, "number")
+end
+local GIMBAL_ROLL_SIGN = gimbalSensorConfig.rollSign
+if GIMBAL_ROLL_SIGN ~= nil then
+    GIMBAL_ROLL_SIGN = requireConfigType("gimbalSensor.rollSign", GIMBAL_ROLL_SIGN, "number")
+end
 local GIMBAL_PITCH_MAX_ANGLE_DEGREES =
     gimbalSensorConfig.pitchMaxAngleDegrees == nil
     and 45
@@ -274,7 +274,14 @@ if GIMBAL_PITCH_MAX_ANGLE_DEGREES < 0
     or GIMBAL_PITCH_ARM_DISTANCE <= 0
     or GIMBAL_ROLL_ARM_DISTANCE <= 0
 then
-    fatalError("invalid gimbal sensor config: angles must be non-negative and distances positive")
+    fatalError("invalid gimbal sensor config: angles and distances must be integers")
+end
+if GIMBAL_PITCH_MAX_ANGLE_DEGREES % 1 ~= 0
+    or GIMBAL_ROLL_MAX_ANGLE_DEGREES % 1 ~= 0
+    or GIMBAL_PITCH_ARM_DISTANCE % 1 ~= 0
+    or GIMBAL_ROLL_ARM_DISTANCE % 1 ~= 0
+then
+    fatalError("invalid gimbal sensor config: angles and distances must be integers")
 end
 if BALANCE_TIMEOUT < 0 or BALANCE_MAX_PACKET_AGE_TICKS < 0 or GPS_TIMEOUT < 0 then
     fatalError("invalid communication timeout: values must be non-negative")
@@ -915,7 +922,7 @@ local function readGimbalSensorPose(basePose)
     end
 
     local ok, data = pcall(gimbalSensorReader.getBlockData)
-    if not ok or type(data) ~= "table" or data.id ~= GIMBAL_SENSOR_BLOCK then
+    if not ok or type(data) ~= "table" then
         return nil
     end
 

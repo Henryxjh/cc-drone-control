@@ -96,8 +96,8 @@ shell.run("gimbal-calibrate.lua")
 程序会询问：
 
 - 姿态传感器 Block Reader 所在方向
-- 无人机正向对应传感器的 `north/east/south/west` 方向
-- `ScrollValue1` 对应 `east_west` 还是 `south_north`
+- 无人机正向对应传感器的方向，可输入 `n/e/s/w` 或完整 `north/east/south/west`
+- `ScrollValue1` 对应的轴，可输入 `ew/sn` 或完整 `east_west/south_north`
 - 四个动力控制器 ID 和采样次数
 
 程序会读取传感器 `Powers`，同时通过 `balance` 协议读取四个螺旋桨坐标计算真实

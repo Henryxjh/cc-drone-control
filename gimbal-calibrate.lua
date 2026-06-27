@@ -38,6 +38,23 @@ local function promptChoice(message, default, choices)
     end
 end
 
+local function promptAliasChoice(message, default, aliases)
+    while true do
+        local value = string.lower(prompt(message, default))
+        local resolved = aliases[value]
+        if resolved ~= nil then
+            return resolved
+        end
+
+        local choices = {}
+        for alias, _ in pairs(aliases) do
+            table.insert(choices, alias)
+        end
+        table.sort(choices)
+        print("Expected one of: " .. table.concat(choices, ", "))
+    end
+end
+
 local function loadConfig()
     if not fs.exists(configPath) then
         return {}
@@ -79,6 +96,10 @@ local function getAxisMaxAngles(data, scrollValue1Axis)
     return scroll2, scroll1
 end
 
+local function round(value)
+    return math.floor(value + 0.5)
+end
+
 local function axisNameFromVector(x, z)
     if x ~= 0 then
         return "east_west"
@@ -86,10 +107,18 @@ local function axisNameFromVector(x, z)
     return "south_north"
 end
 
-local function readGimbal(reader)
-    local data = reader.getBlockData()
-    if type(data) ~= "table" or data.id ~= "simulated:gimbal_sensor" then
-        return nil, "block reader is not reading simulated:gimbal_sensor"
+local function readGimbal(reader, expectedBlock)
+    local okName, blockName = pcall(reader.getBlockName)
+    if not okName or blockName ~= expectedBlock then
+        return nil, ("block reader is reading %s, expected %s"):format(
+            tostring(blockName),
+            expectedBlock
+        )
+    end
+
+    local okData, data = pcall(reader.getBlockData)
+    if not okData or type(data) ~= "table" then
+        return nil, "failed to read gimbal block data"
     end
 
     local powers = data.Powers
@@ -194,22 +223,43 @@ end
 
 local config = loadConfig()
 local motorControllers = config.motorControllers or {}
+local peripheralsConfig = config.peripherals or {}
+local blockReaderConfig = config.blockReader or {}
+local gimbalSensorBlock = blockReaderConfig.gimbalSensorBlock or "simulated:gimbal_sensor"
 local defaultTimeout = config.balanceTimeout or 0.5
 
 print("Gimbal sensor calibration")
 print("Keep the drone tilted and static. A diagonal tilt is best, so both pitch and roll can be inferred.")
 print("")
 
-local gimbalReaderSide = prompt("Gimbal block reader side", "bottom")
-local forwardDirection = promptChoice(
-    "Drone forward corresponds to sensor direction",
-    "north",
-    { "north", "east", "south", "west" }
+local gimbalReaderSide = prompt("Gimbal block reader side", peripheralsConfig.blockReader or "bottom")
+local forwardDirection = promptAliasChoice(
+    "Drone forward sensor direction",
+    "n",
+    {
+        n = "north",
+        north = "north",
+        e = "east",
+        east = "east",
+        s = "south",
+        south = "south",
+        w = "west",
+        west = "west",
+    }
 )
-local scrollValue1Axis = promptChoice(
+local scrollValue1Axis = promptAliasChoice(
     "ScrollValue1 axis",
-    "east_west",
-    { "east_west", "south_north" }
+    "ew",
+    {
+        ew = "east_west",
+        we = "east_west",
+        east_west = "east_west",
+        x = "east_west",
+        sn = "south_north",
+        ns = "south_north",
+        south_north = "south_north",
+        z = "south_north",
+    }
 )
 local sampleCount = promptNumber("Sample count", 10)
 local balanceTimeout = promptNumber("Balance timeout seconds", defaultTimeout)
@@ -244,7 +294,7 @@ local sum = {}
 local validSamples = 0
 
 for i = 1, sampleCount do
-    local gimbal, gimbalErr = readGimbal(reader)
+    local gimbal, gimbalErr = readGimbal(reader, gimbalSensorBlock)
     local pose, poseErr = readDronePose(motorControllers, balanceTimeout)
 
     if gimbal and pose then
@@ -303,30 +353,31 @@ local snippet = ([[
 gimbalSensor = {
     enabled = true,
     blockReader = "%s",
-    blockName = "simulated:gimbal_sensor",
+    blockName = "%s",
     forwardDirection = "%s",
     scrollValue1Axis = "%s",
     pitchAxis = "%s",
     rollAxis = "%s",
     pitchSign = %s,
     rollSign = %s,
-    pitchMaxAngleDegrees = %.6f,
-    rollMaxAngleDegrees = %.6f,
-    pitchArmDistance = %.6f,
-    rollArmDistance = %.6f,
+    pitchMaxAngleDegrees = %d,
+    rollMaxAngleDegrees = %d,
+    pitchArmDistance = %d,
+    rollArmDistance = %d,
 }
 ]]):format(
     gimbalReaderSide,
+    gimbalSensorBlock,
     forwardDirection,
     scrollValue1Axis,
     pitchSensorAxis,
     rollSensorAxis,
     formatOptionalNumber(pitchSign),
     formatOptionalNumber(rollSign),
-    pitchMaxAngle,
-    rollMaxAngle,
-    avg.pitchArmDistance,
-    avg.rollArmDistance
+    round(pitchMaxAngle),
+    round(rollMaxAngle),
+    round(avg.pitchArmDistance),
+    round(avg.rollArmDistance)
 )
 
 local outputPath = fs.combine(programDir, "gimbal-config-snippet.lua")
