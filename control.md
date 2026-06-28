@@ -235,6 +235,8 @@ thrustPerYLevel = 0.17
 baseThrust + (targetY - baseThrustReferenceY) * thrustPerYLevel
 ```
 
+下降时，高度修正后的总推力不会低于 `baseThrust`，这样可以保留姿态纠偏的最低推力余量。
+
 - `baseThrust`：参考高度时的基础悬停速度
 - `baseThrustReferenceY`：`baseThrust` 对应的 Y 坐标，当前为 `-50`
 - `baseThrustReferenceY` 同时也是最低悬停目标高度；下降操作不会将目标高度降到该值以下

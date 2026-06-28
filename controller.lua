@@ -1228,6 +1228,7 @@ function hoverLoop.calculateHoverCorrections(state)
         ALTITUDE_KP * (hoverTargetY - controllerY) - ALTITUDE_KD * state.verticalVelocity
     local hoverThrust =
         BASE_THRUST + (hoverTargetY - BASE_THRUST_REFERENCE_Y) * THRUST_PER_Y_LEVEL
+    local collectiveThrust = math.max(BASE_THRUST, hoverThrust + altitudeCorrection)
     local pitchCorrection =
         -LEVEL_KP * (state.pitchError - desiredPitchError) - LEVEL_KD * state.pitchRate
     local rollCorrection =
@@ -1248,8 +1249,8 @@ function hoverLoop.calculateHoverCorrections(state)
     end
 
     return {
-        altitude = altitudeCorrection,
-        hover = hoverThrust,
+        altitude = 0,
+        hover = collectiveThrust,
         pitch = pitchCorrection,
         roll = rollCorrection,
         yaw = yawCorrection,
