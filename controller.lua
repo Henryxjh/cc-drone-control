@@ -427,6 +427,7 @@ local verticalCommand = 0
 local allSignalsToggleLatched = false
 local powerToggleGesture = { false, false, false, false, nil }
 local manualControlActive = false
+local previousManualControlActive = false
 local navigationWasActive = false
 local navigationResetPending = false
 local navigationCompleted = false
@@ -658,6 +659,19 @@ local function updatePowerToggleGesture(backward, forward, left, right)
         allSignalsToggleLatched = true
         rednet.send(POWER_CONTROLLER_ID, true, "power")
     end
+end
+
+local function updateManualControlRelease()
+    if previousManualControlActive and not manualControlActive then
+        if controllerX ~= nil and controllerY ~= nil and controllerZ ~= nil then
+            hoverTargetX = controllerX
+            hoverTargetY = clamp(controllerY, BASE_THRUST_REFERENCE_Y, MAXIMUM_HOVER_Y)
+            hoverTargetZ = controllerZ
+        end
+        manualNavigationPauseUntil = os.epoch("utc") + 500
+    end
+
+    previousManualControlActive = manualControlActive
 end
 
 local function requestPowerPosition()
@@ -1535,6 +1549,7 @@ local function controlLoop()
             verticalCommand = -1
         end
 
+        updateManualControlRelease()
         updateHover()
         os.sleep(0.05)
     end
