@@ -708,12 +708,13 @@ local function requestPowerPosition()
 end
 
 local function getTheoreticalHoverSpeed()
-    if hoverTargetY == nil then
+    local targetY = requestedHoverTargetY or hoverTargetY
+    if targetY == nil then
         return nil
     end
 
     return round(clamp(
-        BASE_THRUST + (hoverTargetY - BASE_THRUST_REFERENCE_Y) * THRUST_PER_Y_LEVEL,
+        BASE_THRUST + (targetY - BASE_THRUST_REFERENCE_Y) * THRUST_PER_Y_LEVEL,
         MINIMUM_FLIGHT_SPEED,
         MAXIMUM_FLIGHT_SPEED
     ))
@@ -760,7 +761,7 @@ local function drawPowerUi(message)
 
     printUiLine("PowerPos: ", formatPosition(powerControllerX, powerControllerY, powerControllerZ), width)
     printUiLine("CtrlPos : ", formatPosition(controllerX, controllerY, controllerZ), width)
-    printUiLine("Hover   : ", formatPosition(hoverTargetX, hoverTargetY, hoverTargetZ), width)
+    printUiLine("Hover   : ", formatPosition(hoverTargetX, requestedHoverTargetY or hoverTargetY, hoverTargetZ), width)
 
     local navigationText
     if currentTargetX == nil or currentTargetZ == nil then
