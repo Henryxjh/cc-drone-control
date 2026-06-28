@@ -2,7 +2,7 @@
 
 所有可调参数位于 `controller-config.lua`。控制器使用 GPS 位置反馈估算速度和姿态，没有加速度传感器与陀螺仪，因此参数过大时容易放大 GPS 噪声。
 
-动力控制器使用有符号电机速度：
+有线电机使用有符号速度：
 
 - `0`：无推力
 - `256`：正向最大推力
@@ -11,6 +11,22 @@
 控制器正常飞行输出限制在 `0..256`，避免姿态纠偏过大时产生反向下压力。负速度由动力协议支持，可用于电机安装方向修正或后续特殊动作。
 
 调参时每次只修改一组参数，并先在低空测试。旧的 `0..15` 动力参数不能直接继续使用。
+
+## 外设配置
+
+主控制器的外设方向或外设名在 `peripherals` 中配置：
+
+```lua
+peripherals = {
+    modem = "modem_0",
+    blockReader = "bottom",
+    redstoneRelayLeft = "left",
+    redstoneRelayRight = "right",
+}
+```
+
+`modem` 是无线/末影 modem 的方向或外设名，例如 `"back"` 或 wired network 中的
+`"modem_0"`。主控制器只会打开这里指定的 modem，不再自动选择第一个 modem。
 
 ## 动力范围
 
@@ -25,22 +41,31 @@ propulsion = {
 
 正常情况下不要将 `minimumFlightSpeed` 设置为负数。
 
-## 动力控制器通信协议
+## 电机输出与姿态辅助
 
-每个动力控制器在 `side.lua` 中配置自己的 `position` 和 `reverse`：
+主控制器通过 `motorPeripherals` 直接控制四个有线 `electric_motor`：
+
+```lua
+motorPeripherals = {
+    left = "left_motor",
+    right = "right_motor",
+    front = "front_motor",
+    back = "back_motor",
+}
+```
+
+四个辅助控制器仍运行 `side.lua`，只用于返回螺旋桨坐标。每个辅助控制器在 `side.lua`
+中配置自己的 `position`：
 
 ```lua
 local position = "left"
-local reverse = false
 ```
 
-- 主控制器使用 `position` 作为 rednet protocol，消息内容为 `-256..256` 的电机速度
-- 动力控制器调用 `electric_motor.setSpeed(speed)`
-- `reverse = true` 会反转收到的速度，用于修正电机安装方向
-- protocol 为 `balance` 时，主控制器发送 `{seq = n, t = utc_ms}`，动力控制器返回 `{position, x, y, z, side = position, seq = n, t = utc_ms}`
-- protocol 为 `speed` 时，动力控制器返回电机当前实际速度
+- 主控制器直接调用对应有线电机外设的 `setSpeed(speed)`
+- `motorControllers` 中配置的是四个辅助控制器的计算机 ID
+- protocol 为 `balance` 时，主控制器发送 `{seq = n, t = utc_ms}`，辅助控制器返回 `{position, x, y, z, side = position, seq = n, t = utc_ms}`
 
-正常悬停时，四台动力控制器接收到的正速度都必须产生向上推力。
+正常悬停时，四台有线电机接收到的正速度都必须产生向上推力。
 
 控制器 UI 中：
 
@@ -87,8 +112,8 @@ Shell 中用 `Space/Shift` 调整悬停高度时，只会修改期望高度；�
 `gimbal-calibrate.lua` 是独立测试程序，用于为 `simulated:gimbal_sensor` 生成配置片段。
 运行前需要：
 
-- 主控制器能通过无线 modem 访问四个动力控制器
-- 四个动力控制器已使用带 `seq` 和 `t` 的新版 `side.lua`
+- 主控制器能通过无线 modem 访问四个姿态辅助控制器
+- 四个姿态辅助控制器已使用带 `seq` 和 `t` 的新版 `side.lua`
 - Block Reader 正在读取 `simulated:gimbal_sensor`
 - 无人机保持倾斜且静止，最好同时包含前后和左右两个方向的倾斜
 
@@ -103,7 +128,7 @@ shell.run("gimbal-calibrate.lua")
 - 姿态传感器 Block Reader 所在方向
 - 无人机正向对应传感器的方向，可输入 `n/e/s/w` 或完整 `north/east/south/west`
 - `ScrollValue1` 对应的轴，可输入 `ew/sn` 或完整 `east_west/south_north`
-- 四个动力控制器 ID 和采样次数
+- 四个姿态辅助控制器 ID 和采样次数
 
 程序会读取传感器 `Powers`，同时通过 `balance` 协议读取四个螺旋桨坐标计算真实
 `pitchError` 与 `rollError`，再推断传感器轴向和正负号。输出会写入：
@@ -385,13 +410,13 @@ uiRefreshInterval = 0.5
 
 - `powerResponseTimeout`：等待电源控制器响应的最长时间
 - `balanceTimeout`：等待本轮螺旋桨坐标响应的最长时间
-- `balanceMaxPacketAgeTicks`：丢弃动力控制器坐标包的最大年龄，单位为 tick，1 tick 约为 0.05 秒
+- `balanceMaxPacketAgeTicks`：丢弃姿态辅助控制器坐标包的最大年龄，单位为 tick，1 tick 约为 0.05 秒
 - `gpsTimeout`：控制器自身 GPS 定位超时
 - `uiRefreshInterval`：控制器 UI 刷新间隔
 
 主控制器会给每轮 `balance` 请求分配 `seq`，只接收同一轮 `seq` 的响应。响应包里的 `t` 使用 `os.epoch("utc")`，超过 `balanceMaxPacketAgeTicks` 对应时间的包会被丢弃。
 
-姿态计算不再强制等待四个螺旋桨坐标全部返回，而是从最近未过期坐标中选择时间跨度最小的 3 个非共线点，按机体对称关系补齐缺失的第四点，再计算航向、俯仰误差和横滚误差。这样可以降低单个动力控制器响应延迟过高对控制周期的影响。
+姿态计算不再强制等待四个螺旋桨坐标全部返回，而是从最近未过期坐标中选择时间跨度最小的 3 个非共线点，按机体对称关系补齐缺失的第四点，再计算航向、俯仰误差和横滚误差。这样可以降低单个姿态辅助控制器响应延迟过高对控制周期的影响。
 
 计算出的航向、俯仰误差或横滚误差如果相对上一帧突变超过 `maxPoseYawJumpDegrees`、`maxPosePitchJump` 或 `maxPoseRollJump`，本轮会沿用上一帧已接受姿态，避免单帧异常数据进入安全停机和 PID 输出。
 

@@ -1,8 +1,9 @@
 return {
     -- 外设所在方向。
     peripherals = {
+        -- 无线/末影 modem 的方向或外设名，例如 "back" 或 "modem_0"。
+        modem = "modem_0",
         blockReader = "bottom",
-        teleporter = "top",
         redstoneRelayLeft = "left",
         redstoneRelayRight = "right",
     },
@@ -44,7 +45,15 @@ return {
         rollArmDistance = 12,
     },
 
-    -- 四个动力控制器的计算机 ID。
+    -- 四个有线电机外设名。
+    motorPeripherals = {
+        left = "left_motor",
+        right = "right_motor",
+        front = "front_motor",
+        back = "back_motor",
+    },
+
+    -- 四个姿态辅助控制器的计算机 ID，用于 balance 协议返回螺旋桨坐标。
     motorControllers = {
         left = 2,
         right = 3,

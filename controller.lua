@@ -41,6 +41,8 @@ local blockReaderConfig = config.blockReader or {}
 requireConfigType("blockReader", blockReaderConfig, "table")
 local gimbalSensorConfig = config.gimbalSensor or {}
 requireConfigType("gimbalSensor", gimbalSensorConfig, "table")
+local motorPeripherals =
+    requireConfigType("motorPeripherals", config.motorPeripherals, "table")
 local motorControllers =
     requireConfigType("motorControllers", config.motorControllers, "table")
 
@@ -48,8 +50,8 @@ local BLOCK_READER_SIDE = peripherals.blockReader
 if BLOCK_READER_SIDE ~= nil then
     BLOCK_READER_SIDE = requireConfigType("peripherals.blockReader", BLOCK_READER_SIDE, "string")
 end
-local TELEPORTER_SIDE =
-    requireConfigType("peripherals.teleporter", peripherals.teleporter, "string")
+local MODEM_SIDE =
+    requireConfigType("peripherals.modem", peripherals.modem, "string")
 local REDSTONE_RELAY_LEFT_SIDE =
     requireConfigType("peripherals.redstoneRelayLeft", peripherals.redstoneRelayLeft, "string")
 local REDSTONE_RELAY_RIGHT_SIDE =
@@ -119,10 +121,10 @@ local NAVIGATION_COMPLETION_DISTANCE =
             "number"
         )
 
-requireConfigType("motorControllers.left", motorControllers.left, "number")
-requireConfigType("motorControllers.right", motorControllers.right, "number")
-requireConfigType("motorControllers.front", motorControllers.front, "number")
-requireConfigType("motorControllers.back", motorControllers.back, "number")
+for _, side in ipairs({ "left", "right", "front", "back" }) do
+    requireConfigType("motorControllers." .. side, motorControllers[side], "number")
+    requireConfigType("motorPeripherals." .. side, motorPeripherals[side], "string")
+end
 
 local POWER_CONTROLLER_ID =
     requireConfigType("powerControllerId", config.powerControllerId, "number")
@@ -335,9 +337,9 @@ local function logRedstoneInputs(inputs)
     end
 end
 
-local modem = peripheral.find("modem")
-if modem == nil or not modem.isWireless() then
-    fatalError("can't find ender_modem!")
+local modem = peripheral.wrap(MODEM_SIDE)
+if modem == nil or not peripheral.hasType(MODEM_SIDE, "modem") or not modem.isWireless() then
+    fatalError("invalid wireless modem: " .. MODEM_SIDE)
 end
 
 rednet.open(peripheral.getName(modem))
@@ -405,11 +407,6 @@ else
     end
 end
 
-local teleporter = peripheral.wrap(TELEPORTER_SIDE)
-if teleporter == nil then
-    fatalError("can't find teleporter!")
-end
-
 local redstoneRelayLeft = peripheral.wrap(REDSTONE_RELAY_LEFT_SIDE)
 local redstoneRelayRight = peripheral.wrap(REDSTONE_RELAY_RIGHT_SIDE)
 
@@ -465,6 +462,7 @@ local powerControllerZ
 local controllerX
 local controllerY
 local controllerZ
+local motors = {}
 local motorSpeed = {
     left = 0,
     right = 0,
@@ -507,6 +505,18 @@ local function yawToHeading(yaw)
     return heading
 end
 
+local function wrapMotor(side)
+    local motor = peripheral.wrap(motorPeripherals[side])
+    if motor == nil or type(motor.setSpeed) ~= "function" then
+        fatalError("invalid motor peripheral: " .. side)
+    end
+    return motor
+end
+
+for _, side in ipairs({ "left", "right", "front", "back" }) do
+    motors[side] = wrapMotor(side)
+end
+
 local function round(value)
     if value >= 0 then
         return math.floor(value + 0.5)
@@ -517,13 +527,13 @@ end
 local function sendMotorSpeed(side, speed)
     local roundedSpeed = round(clamp(speed, MINIMUM_FLIGHT_SPEED, MAXIMUM_FLIGHT_SPEED))
     motorSpeed[side] = roundedSpeed
-    rednet.send(motorControllers[side], roundedSpeed, side)
+    motors[side].setSpeed(roundedSpeed)
 end
 
 local function stopAllMotors()
-    for side, controllerId in pairs(motorControllers) do
+    for side, motor in pairs(motors) do
         motorSpeed[side] = 0
-        rednet.send(controllerId, 0, side)
+        motor.setSpeed(0)
     end
 end
 
