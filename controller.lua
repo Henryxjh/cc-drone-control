@@ -444,6 +444,7 @@ local manualNavigationPauseUntil = 0
 
 local hoverTargetX
 local hoverTargetY
+local requestedHoverTargetY
 local hoverTargetZ
 local previousControllerX
 local previousControllerY
@@ -529,6 +530,7 @@ end
 local function resetHoverTarget()
     hoverTargetX = nil
     hoverTargetY = nil
+    requestedHoverTargetY = nil
     hoverTargetZ = nil
     previousControllerX = nil
     previousControllerY = nil
@@ -598,9 +600,9 @@ local function adjustHoverTarget(key)
     elseif key == keys.d then
         hoverTargetZ = hoverTargetZ + 1
     elseif key == keys.space then
-        hoverTargetY = math.min(MAXIMUM_HOVER_Y, hoverTargetY + 1)
+        requestedHoverTargetY = math.min(MAXIMUM_HOVER_Y, (requestedHoverTargetY or hoverTargetY) + 1)
     elseif key == keys.leftShift or key == keys.rightShift then
-        hoverTargetY = math.max(BASE_THRUST_REFERENCE_Y, hoverTargetY - 1)
+        requestedHoverTargetY = math.max(BASE_THRUST_REFERENCE_Y, (requestedHoverTargetY or hoverTargetY) - 1)
     else
         return false
     end
@@ -666,6 +668,7 @@ local function updateManualControlRelease()
         if controllerX ~= nil and controllerY ~= nil and controllerZ ~= nil then
             hoverTargetX = controllerX
             hoverTargetY = clamp(controllerY, BASE_THRUST_REFERENCE_Y, MAXIMUM_HOVER_Y)
+            requestedHoverTargetY = hoverTargetY
             hoverTargetZ = controllerZ
         end
         manualNavigationPauseUntil = os.epoch("utc") + 500
@@ -1130,6 +1133,7 @@ function hoverLoop.ensureHoverTarget()
     if hoverTargetY == nil then
         hoverTargetX = controllerX
         hoverTargetY = clamp(controllerY, BASE_THRUST_REFERENCE_Y, MAXIMUM_HOVER_Y)
+        requestedHoverTargetY = hoverTargetY
         hoverTargetZ = controllerZ
     end
 end
@@ -1168,18 +1172,30 @@ function hoverLoop.updateHoverTargetFromCommands(state)
     local movementDeltaTime = clamp(state.deltaTime or 0, 0, 0.5)
     local forwardDistance = forwardCommand * HORIZONTAL_MOVE_SPEED * movementDeltaTime
     local rightDistance = rightCommand * HORIZONTAL_MOVE_SPEED * movementDeltaTime
+    requestedHoverTargetY = requestedHoverTargetY or hoverTargetY
     hoverTargetX =
         hoverTargetX
         + state.forwardX * forwardDistance
         + state.rightX * rightDistance
     if verticalCommand > 0 then
-        hoverTargetY = math.min(
+        requestedHoverTargetY = math.min(
             MAXIMUM_HOVER_Y,
-            hoverTargetY + MAXIMUM_CLIMB_RATE * movementDeltaTime
+            requestedHoverTargetY + MAXIMUM_CLIMB_RATE * movementDeltaTime
         )
     elseif verticalCommand < 0 then
-        hoverTargetY = math.max(
+        requestedHoverTargetY = math.max(
             BASE_THRUST_REFERENCE_Y,
+            requestedHoverTargetY - MAXIMUM_DESCENT_RATE * movementDeltaTime
+        )
+    end
+    if requestedHoverTargetY > hoverTargetY then
+        hoverTargetY = math.min(
+            requestedHoverTargetY,
+            hoverTargetY + MAXIMUM_CLIMB_RATE * movementDeltaTime
+        )
+    elseif requestedHoverTargetY < hoverTargetY then
+        hoverTargetY = math.max(
+            requestedHoverTargetY,
             hoverTargetY - MAXIMUM_DESCENT_RATE * movementDeltaTime
         )
     end

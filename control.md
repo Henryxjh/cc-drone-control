@@ -79,6 +79,9 @@ redstoneLogging = false
 
 红石手动飞行输入全部释放时，控制器会把当前控制器坐标刷新为新的悬停目标，避免继续追逐手动飞行期间累积出来的旧目标点。
 
+Shell 中用 `Space/Shift` 调整悬停高度时，只会修改期望高度；实际用于 PID 的悬停目标高度仍会按
+`maximumClimbRate/maximumDescentRate` 逐步移动，避免一次按键造成过大的下降阶跃。
+
 ## 姿态传感器校准
 
 `gimbal-calibrate.lua` 是独立测试程序，用于为 `simulated:gimbal_sensor` 生成配置片段。
